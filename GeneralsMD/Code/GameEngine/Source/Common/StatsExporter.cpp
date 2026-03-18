@@ -235,12 +235,6 @@ struct FrameSnapshotData
 	PlayerSnapshotData players[MAX_PLAYER_COUNT];
 };
 
-static std::vector<FrameSnapshotData> s_snapshots;
-static UnsignedInt s_lastSnapshotFrame = 0;
-static Int s_gamePlayerCount = 0;
-static Int s_originalToNewIndex[MAX_PLAYER_COUNT];
-static Bool s_mappingInitialized = FALSE;
-
 struct KillEventData
 {
 	UnsignedInt frame;
@@ -252,8 +246,6 @@ struct KillEventData
 	char victimTemplateName[64];
 	char damageType[32];
 };
-
-static std::vector<KillEventData> s_killEvents;
 
 struct BuildEventData
 {
@@ -267,8 +259,6 @@ struct BuildEventData
 	char producerTemplateName[64];
 };
 
-static std::vector<BuildEventData> s_buildEvents;
-
 struct CaptureEventData
 {
 	UnsignedInt frame;
@@ -279,28 +269,60 @@ struct CaptureEventData
 	char templateName[64];
 };
 
-static std::vector<CaptureEventData> s_captureEvents;
+struct StatsExporterState
+{
+	Bool exportingActive;
+	Bool mappingInitialized;
+	Int gamePlayerCount;
+	Int originalToNewIndex[MAX_PLAYER_COUNT];
+	UnsignedInt lastSnapshotFrame;
+	PlayerStateData lastPlayerState[MAX_PLAYER_COUNT];
 
-static PlayerStateData s_lastPlayerState[MAX_PLAYER_COUNT];
-static std::vector<EnergyEvent> s_energyEvents;
-static std::vector<RankEvent> s_rankEvents;
-static std::vector<SkillPointsEvent> s_skillPointsEvents;
-static std::vector<SciencePointsEvent> s_sciencePointsEvents;
-static std::vector<RadarEvent> s_radarEvents;
-static std::vector<DeathEvent> s_deathEvents;
-static std::vector<BattlePlanEvent> s_battlePlanEvents;
+	std::vector<FrameSnapshotData> snapshots;
+	std::vector<KillEventData> killEvents;
+	std::vector<BuildEventData> buildEvents;
+	std::vector<CaptureEventData> captureEvents;
+	std::vector<EnergyEvent> energyEvents;
+	std::vector<RankEvent> rankEvents;
+	std::vector<SkillPointsEvent> skillPointsEvents;
+	std::vector<SciencePointsEvent> sciencePointsEvents;
+	std::vector<RadarEvent> radarEvents;
+	std::vector<DeathEvent> deathEvents;
+	std::vector<BattlePlanEvent> battlePlanEvents;
 
-static Bool s_exportingActive = FALSE;
+	void clear()
+	{
+		exportingActive = TRUE;
+		mappingInitialized = FALSE;
+		gamePlayerCount = 0;
+		lastSnapshotFrame = 0;
+		memset(originalToNewIndex, 0, sizeof(originalToNewIndex));
+		memset(lastPlayerState, 0, sizeof(lastPlayerState));
+		snapshots.clear();
+		killEvents.clear();
+		buildEvents.clear();
+		captureEvents.clear();
+		energyEvents.clear();
+		rankEvents.clear();
+		skillPointsEvents.clear();
+		sciencePointsEvents.clear();
+		radarEvents.clear();
+		deathEvents.clear();
+		battlePlanEvents.clear();
+	}
+};
+
+static StatsExporterState s_state;
 
 //-----------------------------------------------------------------------------
 
 static void initPlayerMapping()
 {
-	if (s_mappingInitialized)
+	if (s_state.mappingInitialized)
 		return;
 
-	s_gamePlayerCount = 0;
-	memset(s_originalToNewIndex, 0, sizeof(s_originalToNewIndex));
+	s_state.gamePlayerCount = 0;
+	memset(s_state.originalToNewIndex, 0, sizeof(s_state.originalToNewIndex));
 
 	const Int totalPlayers = ThePlayerList->getPlayerCount();
 	Int i;
@@ -309,15 +331,15 @@ static void initPlayerMapping()
 		Player *player = ThePlayerList->getNthPlayer(i);
 		if (isGamePlayer(player))
 		{
-			++s_gamePlayerCount;
-			s_originalToNewIndex[i] = s_gamePlayerCount;
+			++s_state.gamePlayerCount;
+			s_state.originalToNewIndex[i] = s_state.gamePlayerCount;
 		}
 	}
 
 	// Only lock in the mapping once we find actual game players.
 	// Early calls (before players are fully initialized) will retry.
-	if (s_gamePlayerCount > 0)
-		s_mappingInitialized = TRUE;
+	if (s_state.gamePlayerCount > 0)
+		s_state.mappingInitialized = TRUE;
 }
 
 //-----------------------------------------------------------------------------
@@ -328,10 +350,10 @@ void StatsExporterCollectSnapshot()
 		return;
 
 	UnsignedInt currentFrame = TheGameLogic->getFrame();
-	if (!s_snapshots.empty() && (currentFrame - s_lastSnapshotFrame) < 30)
+	if (!s_state.snapshots.empty() && (currentFrame - s_state.lastSnapshotFrame) < 30)
 		return;
 
-	s_lastSnapshotFrame = currentFrame;
+	s_state.lastSnapshotFrame = currentFrame;
 
 	initPlayerMapping();
 
@@ -340,13 +362,13 @@ void StatsExporterCollectSnapshot()
 	FrameSnapshotData snap;
 	memset(&snap, 0, sizeof(snap));
 	snap.frame = currentFrame;
-	snap.playerCount = s_gamePlayerCount;
+	snap.playerCount = s_state.gamePlayerCount;
 
 	Int gameIdx = 0;
 	Int i;
 	for (i = 0; i < totalPlayers && i < MAX_PLAYER_COUNT; ++i)
 	{
-		if (s_originalToNewIndex[i] == 0)
+		if (s_state.originalToNewIndex[i] == 0)
 			continue;
 
 		Player *player = ThePlayerList->getNthPlayer(i);
@@ -357,14 +379,14 @@ void StatsExporterCollectSnapshot()
 		ScoreKeeper *sk = player->getScoreKeeper();
 		const Energy *energy = player->getEnergy();
 
-		pd.playerIndex = s_originalToNewIndex[i];
+		pd.playerIndex = s_state.originalToNewIndex[i];
 		pd.money = player->getMoney()->countMoney();
 		pd.moneyEarned = sk->getTotalMoneyEarned();
 		pd.moneySpent = sk->getTotalMoneySpent();
 
 		// Detect state changes and emit events
 		{
-			PlayerStateData &last = s_lastPlayerState[i];
+			PlayerStateData &last = s_state.lastPlayerState[i];
 			Int curVal, curVal2, curVal3;
 			Bool curBool;
 
@@ -378,7 +400,7 @@ void StatsExporterCollectSnapshot()
 				eev.playerIndex = i;
 				eev.production = curVal;
 				eev.consumption = curVal2;
-				s_energyEvents.push_back(eev);
+				s_state.energyEvents.push_back(eev);
 				last.energyProduction = curVal;
 				last.energyConsumption = curVal2;
 			}
@@ -391,7 +413,7 @@ void StatsExporterCollectSnapshot()
 				rev.frame = currentFrame;
 				rev.playerIndex = i;
 				rev.rankLevel = curVal;
-				s_rankEvents.push_back(rev);
+				s_state.rankEvents.push_back(rev);
 				last.rankLevel = curVal;
 			}
 
@@ -403,7 +425,7 @@ void StatsExporterCollectSnapshot()
 				sev.frame = currentFrame;
 				sev.playerIndex = i;
 				sev.skillPoints = curVal;
-				s_skillPointsEvents.push_back(sev);
+				s_state.skillPointsEvents.push_back(sev);
 				last.skillPoints = curVal;
 			}
 
@@ -415,7 +437,7 @@ void StatsExporterCollectSnapshot()
 				spev.frame = currentFrame;
 				spev.playerIndex = i;
 				spev.sciencePurchasePoints = curVal;
-				s_sciencePointsEvents.push_back(spev);
+				s_state.sciencePointsEvents.push_back(spev);
 				last.sciencePurchasePoints = curVal;
 			}
 
@@ -427,7 +449,7 @@ void StatsExporterCollectSnapshot()
 				raev.frame = currentFrame;
 				raev.playerIndex = i;
 				raev.hasRadar = curBool;
-				s_radarEvents.push_back(raev);
+				s_state.radarEvents.push_back(raev);
 				last.hasRadar = curBool;
 			}
 
@@ -438,7 +460,7 @@ void StatsExporterCollectSnapshot()
 				memset(&dev, 0, sizeof(dev));
 				dev.frame = currentFrame;
 				dev.playerIndex = i;
-				s_deathEvents.push_back(dev);
+				s_state.deathEvents.push_back(dev);
 				last.isDead = curBool;
 			}
 
@@ -454,7 +476,7 @@ void StatsExporterCollectSnapshot()
 				bev.bombardment = curVal;
 				bev.holdTheLine = curVal2;
 				bev.searchAndDestroy = curVal3;
-				s_battlePlanEvents.push_back(bev);
+				s_state.battlePlanEvents.push_back(bev);
 				last.bombardment = curVal;
 				last.holdTheLine = curVal2;
 				last.searchAndDestroy = curVal3;
@@ -464,39 +486,28 @@ void StatsExporterCollectSnapshot()
 		++gameIdx;
 	}
 
-	s_snapshots.push_back(snap);
+	s_state.snapshots.push_back(snap);
 }
 
 //-----------------------------------------------------------------------------
 
 void StatsExporterClearSnapshots()
 {
-	s_exportingActive = TRUE;
-	s_snapshots.clear();
-	s_killEvents.clear();
-	s_buildEvents.clear();
-	s_captureEvents.clear();
-	s_energyEvents.clear();
-	s_rankEvents.clear();
-	s_skillPointsEvents.clear();
-	s_sciencePointsEvents.clear();
-	s_radarEvents.clear();
-	s_deathEvents.clear();
-	s_battlePlanEvents.clear();
-	memset(s_lastPlayerState, 0, sizeof(s_lastPlayerState));
-	s_lastSnapshotFrame = 0;
-	s_gamePlayerCount = 0;
-	s_mappingInitialized = FALSE;
-	memset(s_originalToNewIndex, 0, sizeof(s_originalToNewIndex));
+	s_state.clear();
 }
 
 //-----------------------------------------------------------------------------
 
 void StatsExporterRecordKill(const Object *killer, const Object *victim, const DamageInfo *damageInfo)
 {
-	if (!s_exportingActive)
+	if (!s_state.exportingActive)
 		return;
 	if (killer == nullptr || victim == nullptr || TheGameLogic == nullptr)
+		return;
+
+	const Player *killerPlayer = killer->getControllingPlayer();
+	const Player *victimPlayer = victim->getControllingPlayer();
+	if (killerPlayer == nullptr || victimPlayer == nullptr)
 		return;
 
 	KillEventData ev;
@@ -504,8 +515,8 @@ void StatsExporterRecordKill(const Object *killer, const Object *victim, const D
 	ev.frame = TheGameLogic->getFrame();
 
 	// Store raw player indices; remapped to game-player indices at export time.
-	ev.killerPlayerIndex = killer->getControllingPlayer()->getPlayerIndex();
-	ev.victimPlayerIndex = victim->getControllingPlayer()->getPlayerIndex();
+	ev.killerPlayerIndex = killerPlayer->getPlayerIndex();
+	ev.victimPlayerIndex = victimPlayer->getPlayerIndex();
 
 	const Coord3D *pos = victim->getPosition();
 	if (pos != nullptr)
@@ -524,16 +535,20 @@ void StatsExporterRecordKill(const Object *killer, const Object *victim, const D
 			strlcpy(ev.damageType, name, ARRAY_SIZE(ev.damageType));
 	}
 
-	s_killEvents.push_back(ev);
+	s_state.killEvents.push_back(ev);
 }
 
 //-----------------------------------------------------------------------------
 
 void StatsExporterRecordBuild(const Object *producer, const Object *built)
 {
-	if (!s_exportingActive)
+	if (!s_state.exportingActive)
 		return;
 	if (built == nullptr || TheGameLogic == nullptr)
+		return;
+
+	const Player *player = built->getControllingPlayer();
+	if (player == nullptr)
 		return;
 
 	BuildEventData ev;
@@ -541,7 +556,7 @@ void StatsExporterRecordBuild(const Object *producer, const Object *built)
 	ev.frame = TheGameLogic->getFrame();
 
 	// Store raw player index; remapped at export time.
-	ev.playerIndex = built->getControllingPlayer()->getPlayerIndex();
+	ev.playerIndex = player->getPlayerIndex();
 
 	const Coord3D *pos = built->getPosition();
 	if (pos != nullptr)
@@ -549,8 +564,6 @@ void StatsExporterRecordBuild(const Object *producer, const Object *built)
 		ev.x = pos->x;
 		ev.y = pos->y;
 	}
-
-	const Player *player = built->getControllingPlayer();
 	ev.cost = built->getTemplate()->calcCostToBuild(player);
 	ev.buildTime = built->getTemplate()->calcTimeToBuild(player);
 
@@ -559,14 +572,14 @@ void StatsExporterRecordBuild(const Object *producer, const Object *built)
 	if (producer != nullptr)
 		strlcpy(ev.producerTemplateName, producer->getTemplate()->getName().str(), ARRAY_SIZE(ev.producerTemplateName));
 
-	s_buildEvents.push_back(ev);
+	s_state.buildEvents.push_back(ev);
 }
 
 //-----------------------------------------------------------------------------
 
 void StatsExporterRecordCapture(const Object *captured, const Player *oldOwner, const Player *newOwner)
 {
-	if (!s_exportingActive)
+	if (!s_state.exportingActive)
 		return;
 	if (captured == nullptr || oldOwner == nullptr || newOwner == nullptr || TheGameLogic == nullptr)
 		return;
@@ -588,7 +601,7 @@ void StatsExporterRecordCapture(const Object *captured, const Player *oldOwner, 
 
 	strlcpy(ev.templateName, captured->getTemplate()->getName().str(), ARRAY_SIZE(ev.templateName));
 
-	s_captureEvents.push_back(ev);
+	s_state.captureEvents.push_back(ev);
 }
 
 //-----------------------------------------------------------------------------
@@ -596,20 +609,20 @@ void StatsExporterRecordCapture(const Object *captured, const Player *oldOwner, 
 static void writeCaptureEvents(JsonBuffer *b)
 {
 	bufPuts(b, "  \"captureEvents\": [\n");
-	for (size_t i = 0; i < s_captureEvents.size(); ++i)
+	for (size_t i = 0; i < s_state.captureEvents.size(); ++i)
 	{
 		if (i > 0) bufPuts(b, ",\n");
-		const CaptureEventData &ev = s_captureEvents[i];
+		const CaptureEventData &ev = s_state.captureEvents[i];
 
-		Int newIdx = (ev.newOwnerPlayerIndex >= 0 && ev.newOwnerPlayerIndex < MAX_PLAYER_COUNT) ? s_originalToNewIndex[ev.newOwnerPlayerIndex] : 0;
-		Int oldIdx = (ev.oldOwnerPlayerIndex >= 0 && ev.oldOwnerPlayerIndex < MAX_PLAYER_COUNT) ? s_originalToNewIndex[ev.oldOwnerPlayerIndex] : 0;
+		Int newIdx = (ev.newOwnerPlayerIndex >= 0 && ev.newOwnerPlayerIndex < MAX_PLAYER_COUNT) ? s_state.originalToNewIndex[ev.newOwnerPlayerIndex] : 0;
+		Int oldIdx = (ev.oldOwnerPlayerIndex >= 0 && ev.oldOwnerPlayerIndex < MAX_PLAYER_COUNT) ? s_state.originalToNewIndex[ev.oldOwnerPlayerIndex] : 0;
 
 		bufPrintf(b, "    {\"frame\": %u, \"newOwner\": %d, \"oldOwner\": %d, \"x\": %.1f, \"y\": %.1f, \"object\": ",
 			ev.frame, newIdx, oldIdx, ev.x, ev.y);
 		bufJsonString(b, ev.templateName);
 		bufPutc(b, '}');
 	}
-	if (!s_captureEvents.empty()) bufPutc(b, '\n');
+	if (!s_state.captureEvents.empty()) bufPutc(b, '\n');
 	bufPuts(b, "  ]");
 }
 
@@ -618,12 +631,12 @@ static void writeCaptureEvents(JsonBuffer *b)
 static void writeBuildEvents(JsonBuffer *b)
 {
 	bufPuts(b, "  \"buildEvents\": [\n");
-	for (size_t i = 0; i < s_buildEvents.size(); ++i)
+	for (size_t i = 0; i < s_state.buildEvents.size(); ++i)
 	{
 		if (i > 0) bufPuts(b, ",\n");
-		const BuildEventData &ev = s_buildEvents[i];
+		const BuildEventData &ev = s_state.buildEvents[i];
 
-		Int playerIdx = (ev.playerIndex >= 0 && ev.playerIndex < MAX_PLAYER_COUNT) ? s_originalToNewIndex[ev.playerIndex] : 0;
+		Int playerIdx = (ev.playerIndex >= 0 && ev.playerIndex < MAX_PLAYER_COUNT) ? s_state.originalToNewIndex[ev.playerIndex] : 0;
 
 		bufPrintf(b, "    {\"frame\": %u, \"player\": %d, \"x\": %.1f, \"y\": %.1f, \"cost\": %d, \"buildTime\": %d, \"object\": ",
 			ev.frame, playerIdx, ev.x, ev.y, ev.cost, ev.buildTime);
@@ -632,7 +645,7 @@ static void writeBuildEvents(JsonBuffer *b)
 		bufJsonString(b, ev.producerTemplateName);
 		bufPutc(b, '}');
 	}
-	if (!s_buildEvents.empty()) bufPutc(b, '\n');
+	if (!s_state.buildEvents.empty()) bufPutc(b, '\n');
 	bufPuts(b, "  ]");
 }
 
@@ -641,13 +654,13 @@ static void writeBuildEvents(JsonBuffer *b)
 static void writeKillEvents(JsonBuffer *b)
 {
 	bufPuts(b, "  \"killEvents\": [\n");
-	for (size_t i = 0; i < s_killEvents.size(); ++i)
+	for (size_t i = 0; i < s_state.killEvents.size(); ++i)
 	{
 		if (i > 0) bufPuts(b, ",\n");
-		const KillEventData &ev = s_killEvents[i];
+		const KillEventData &ev = s_state.killEvents[i];
 
-		Int killerIdx = (ev.killerPlayerIndex >= 0 && ev.killerPlayerIndex < MAX_PLAYER_COUNT) ? s_originalToNewIndex[ev.killerPlayerIndex] : 0;
-		Int victimIdx = (ev.victimPlayerIndex >= 0 && ev.victimPlayerIndex < MAX_PLAYER_COUNT) ? s_originalToNewIndex[ev.victimPlayerIndex] : 0;
+		Int killerIdx = (ev.killerPlayerIndex >= 0 && ev.killerPlayerIndex < MAX_PLAYER_COUNT) ? s_state.originalToNewIndex[ev.killerPlayerIndex] : 0;
+		Int victimIdx = (ev.victimPlayerIndex >= 0 && ev.victimPlayerIndex < MAX_PLAYER_COUNT) ? s_state.originalToNewIndex[ev.victimPlayerIndex] : 0;
 
 		bufPrintf(b, "    {\"frame\": %u, \"killerPlayer\": %d, \"victimPlayer\": %d, \"x\": %.1f, \"y\": %.1f, \"killer\": ",
 			ev.frame, killerIdx, victimIdx, ev.x, ev.y);
@@ -658,7 +671,7 @@ static void writeKillEvents(JsonBuffer *b)
 		bufJsonString(b, ev.damageType);
 		bufPutc(b, '}');
 	}
-	if (!s_killEvents.empty()) bufPutc(b, '\n');
+	if (!s_state.killEvents.empty()) bufPutc(b, '\n');
 	bufPuts(b, "  ]");
 }
 
@@ -669,81 +682,81 @@ static void writeStateChangeEvents(JsonBuffer *b)
 	size_t i;
 
 	bufPuts(b, "  \"energyEvents\": [\n");
-	for (i = 0; i < s_energyEvents.size(); ++i)
+	for (i = 0; i < s_state.energyEvents.size(); ++i)
 	{
 		if (i > 0) bufPuts(b, ",\n");
-		const EnergyEvent &ev = s_energyEvents[i];
-		Int idx = (ev.playerIndex >= 0 && ev.playerIndex < MAX_PLAYER_COUNT) ? s_originalToNewIndex[ev.playerIndex] : 0;
+		const EnergyEvent &ev = s_state.energyEvents[i];
+		Int idx = (ev.playerIndex >= 0 && ev.playerIndex < MAX_PLAYER_COUNT) ? s_state.originalToNewIndex[ev.playerIndex] : 0;
 		bufPrintf(b, "    {\"frame\": %u, \"player\": %d, \"production\": %d, \"consumption\": %d}", ev.frame, idx, ev.production, ev.consumption);
 	}
-	if (!s_energyEvents.empty()) bufPutc(b, '\n');
+	if (!s_state.energyEvents.empty()) bufPutc(b, '\n');
 	bufPuts(b, "  ],\n");
 
 	bufPuts(b, "  \"rankEvents\": [\n");
-	for (i = 0; i < s_rankEvents.size(); ++i)
+	for (i = 0; i < s_state.rankEvents.size(); ++i)
 	{
 		if (i > 0) bufPuts(b, ",\n");
-		const RankEvent &ev = s_rankEvents[i];
-		Int idx = (ev.playerIndex >= 0 && ev.playerIndex < MAX_PLAYER_COUNT) ? s_originalToNewIndex[ev.playerIndex] : 0;
+		const RankEvent &ev = s_state.rankEvents[i];
+		Int idx = (ev.playerIndex >= 0 && ev.playerIndex < MAX_PLAYER_COUNT) ? s_state.originalToNewIndex[ev.playerIndex] : 0;
 		bufPrintf(b, "    {\"frame\": %u, \"player\": %d, \"rankLevel\": %d}", ev.frame, idx, ev.rankLevel);
 	}
-	if (!s_rankEvents.empty()) bufPutc(b, '\n');
+	if (!s_state.rankEvents.empty()) bufPutc(b, '\n');
 	bufPuts(b, "  ],\n");
 
 	bufPuts(b, "  \"skillPointsEvents\": [\n");
-	for (i = 0; i < s_skillPointsEvents.size(); ++i)
+	for (i = 0; i < s_state.skillPointsEvents.size(); ++i)
 	{
 		if (i > 0) bufPuts(b, ",\n");
-		const SkillPointsEvent &ev = s_skillPointsEvents[i];
-		Int idx = (ev.playerIndex >= 0 && ev.playerIndex < MAX_PLAYER_COUNT) ? s_originalToNewIndex[ev.playerIndex] : 0;
+		const SkillPointsEvent &ev = s_state.skillPointsEvents[i];
+		Int idx = (ev.playerIndex >= 0 && ev.playerIndex < MAX_PLAYER_COUNT) ? s_state.originalToNewIndex[ev.playerIndex] : 0;
 		bufPrintf(b, "    {\"frame\": %u, \"player\": %d, \"skillPoints\": %d}", ev.frame, idx, ev.skillPoints);
 	}
-	if (!s_skillPointsEvents.empty()) bufPutc(b, '\n');
+	if (!s_state.skillPointsEvents.empty()) bufPutc(b, '\n');
 	bufPuts(b, "  ],\n");
 
 	bufPuts(b, "  \"sciencePointsEvents\": [\n");
-	for (i = 0; i < s_sciencePointsEvents.size(); ++i)
+	for (i = 0; i < s_state.sciencePointsEvents.size(); ++i)
 	{
 		if (i > 0) bufPuts(b, ",\n");
-		const SciencePointsEvent &ev = s_sciencePointsEvents[i];
-		Int idx = (ev.playerIndex >= 0 && ev.playerIndex < MAX_PLAYER_COUNT) ? s_originalToNewIndex[ev.playerIndex] : 0;
+		const SciencePointsEvent &ev = s_state.sciencePointsEvents[i];
+		Int idx = (ev.playerIndex >= 0 && ev.playerIndex < MAX_PLAYER_COUNT) ? s_state.originalToNewIndex[ev.playerIndex] : 0;
 		bufPrintf(b, "    {\"frame\": %u, \"player\": %d, \"sciencePurchasePoints\": %d}", ev.frame, idx, ev.sciencePurchasePoints);
 	}
-	if (!s_sciencePointsEvents.empty()) bufPutc(b, '\n');
+	if (!s_state.sciencePointsEvents.empty()) bufPutc(b, '\n');
 	bufPuts(b, "  ],\n");
 
 	bufPuts(b, "  \"radarEvents\": [\n");
-	for (i = 0; i < s_radarEvents.size(); ++i)
+	for (i = 0; i < s_state.radarEvents.size(); ++i)
 	{
 		if (i > 0) bufPuts(b, ",\n");
-		const RadarEvent &ev = s_radarEvents[i];
-		Int idx = (ev.playerIndex >= 0 && ev.playerIndex < MAX_PLAYER_COUNT) ? s_originalToNewIndex[ev.playerIndex] : 0;
+		const RadarEvent &ev = s_state.radarEvents[i];
+		Int idx = (ev.playerIndex >= 0 && ev.playerIndex < MAX_PLAYER_COUNT) ? s_state.originalToNewIndex[ev.playerIndex] : 0;
 		bufPrintf(b, "    {\"frame\": %u, \"player\": %d, \"hasRadar\": %s}", ev.frame, idx, ev.hasRadar ? "true" : "false");
 	}
-	if (!s_radarEvents.empty()) bufPutc(b, '\n');
+	if (!s_state.radarEvents.empty()) bufPutc(b, '\n');
 	bufPuts(b, "  ],\n");
 
 	bufPuts(b, "  \"deathEvents\": [\n");
-	for (i = 0; i < s_deathEvents.size(); ++i)
+	for (i = 0; i < s_state.deathEvents.size(); ++i)
 	{
 		if (i > 0) bufPuts(b, ",\n");
-		const DeathEvent &ev = s_deathEvents[i];
-		Int idx = (ev.playerIndex >= 0 && ev.playerIndex < MAX_PLAYER_COUNT) ? s_originalToNewIndex[ev.playerIndex] : 0;
+		const DeathEvent &ev = s_state.deathEvents[i];
+		Int idx = (ev.playerIndex >= 0 && ev.playerIndex < MAX_PLAYER_COUNT) ? s_state.originalToNewIndex[ev.playerIndex] : 0;
 		bufPrintf(b, "    {\"frame\": %u, \"player\": %d}", ev.frame, idx);
 	}
-	if (!s_deathEvents.empty()) bufPutc(b, '\n');
+	if (!s_state.deathEvents.empty()) bufPutc(b, '\n');
 	bufPuts(b, "  ],\n");
 
 	bufPuts(b, "  \"battlePlanEvents\": [\n");
-	for (i = 0; i < s_battlePlanEvents.size(); ++i)
+	for (i = 0; i < s_state.battlePlanEvents.size(); ++i)
 	{
 		if (i > 0) bufPuts(b, ",\n");
-		const BattlePlanEvent &ev = s_battlePlanEvents[i];
-		Int idx = (ev.playerIndex >= 0 && ev.playerIndex < MAX_PLAYER_COUNT) ? s_originalToNewIndex[ev.playerIndex] : 0;
+		const BattlePlanEvent &ev = s_state.battlePlanEvents[i];
+		Int idx = (ev.playerIndex >= 0 && ev.playerIndex < MAX_PLAYER_COUNT) ? s_state.originalToNewIndex[ev.playerIndex] : 0;
 		bufPrintf(b, "    {\"frame\": %u, \"player\": %d, \"bombardment\": %d, \"holdTheLine\": %d, \"searchAndDestroy\": %d}",
 			ev.frame, idx, ev.bombardment, ev.holdTheLine, ev.searchAndDestroy);
 	}
-	if (!s_battlePlanEvents.empty()) bufPutc(b, '\n');
+	if (!s_state.battlePlanEvents.empty()) bufPutc(b, '\n');
 	bufPuts(b, "  ],\n");
 }
 
@@ -758,7 +771,7 @@ static void writeTimeSeries(JsonBuffer *b)
 
 	bufPuts(b, "    \"players\": [\n");
 
-	for (pi = 0; pi < s_gamePlayerCount; ++pi)
+	for (pi = 0; pi < s_state.gamePlayerCount; ++pi)
 	{
 		if (pi > 0) bufPuts(b, ",\n");
 		bufPuts(b, "      {\n");
@@ -766,26 +779,26 @@ static void writeTimeSeries(JsonBuffer *b)
 		bufPrintf(b, "        \"index\": %d,\n", pi + 1);
 
 		bufPuts(b, "        \"money\": [");
-		for (s = 0; s < s_snapshots.size(); ++s)
+		for (s = 0; s < s_state.snapshots.size(); ++s)
 		{
 			if (s > 0) bufPutc(b, ',');
-			bufPrintf(b, "%u", s_snapshots[s].players[pi].money);
+			bufPrintf(b, "%u", s_state.snapshots[s].players[pi].money);
 		}
 		bufPuts(b, "],\n");
 
 		bufPuts(b, "        \"moneyEarned\": [");
-		for (s = 0; s < s_snapshots.size(); ++s)
+		for (s = 0; s < s_state.snapshots.size(); ++s)
 		{
 			if (s > 0) bufPutc(b, ',');
-			bufPrintf(b, "%d", s_snapshots[s].players[pi].moneyEarned);
+			bufPrintf(b, "%d", s_state.snapshots[s].players[pi].moneyEarned);
 		}
 		bufPuts(b, "],\n");
 
 		bufPuts(b, "        \"moneySpent\": [");
-		for (s = 0; s < s_snapshots.size(); ++s)
+		for (s = 0; s < s_state.snapshots.size(); ++s)
 		{
 			if (s > 0) bufPutc(b, ',');
-			bufPrintf(b, "%d", s_snapshots[s].players[pi].moneySpent);
+			bufPrintf(b, "%d", s_state.snapshots[s].players[pi].moneySpent);
 		}
 		bufPuts(b, "]\n");
 
@@ -841,7 +854,7 @@ void ExportGameStatsJSON(const AsciiString& replayDir, const AsciiString& replay
 	bufPrintf(&buf, "    \"frameCount\": %u,\n", TheGameLogic->getFrame());
 	bufPrintf(&buf, "    \"seed\": %u,\n", GetGameLogicRandomSeed());
 	bufPuts(&buf, "    \"replayFile\": "); bufJsonString(&buf, replayFileName.str()); bufPuts(&buf, ",\n");
-	bufPrintf(&buf, "    \"playerCount\": %d,\n", s_gamePlayerCount);
+	bufPrintf(&buf, "    \"playerCount\": %d,\n", s_state.gamePlayerCount);
 	bufPuts(&buf, "    \"snapshotInterval\": 30\n");
 	bufPuts(&buf, "  },\n");
 
@@ -865,7 +878,7 @@ void ExportGameStatsJSON(const AsciiString& replayDir, const AsciiString& replay
 		bufPuts(&buf, "    {\n");
 
 		// Basic info
-		bufPrintf(&buf, "      \"index\": %d,\n", s_originalToNewIndex[i]);
+		bufPrintf(&buf, "      \"index\": %d,\n", s_state.originalToNewIndex[i]);
 		bufPuts(&buf, "      \"displayName\": "); bufJsonWideString(&buf, player->getPlayerDisplayName().str()); bufPuts(&buf, ",\n");
 		if (pt != nullptr)
 		{
@@ -974,5 +987,5 @@ void ExportGameStatsJSON(const AsciiString& replayDir, const AsciiString& replay
 	bufFree(&buf);
 
 	StatsExporterClearSnapshots();
-	s_exportingActive = FALSE;
+	s_state.exportingActive = FALSE;
 }

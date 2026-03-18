@@ -97,8 +97,8 @@ public:
 	Int getTotalUnitsBuilt( KindOfMaskType validMask, KindOfMaskType invalidMask );
 
 	typedef std::map<const ThingTemplate *, Int> ObjectCountMap;
-	Int getUnitsDestroyedByPlayer( Int idx ) const { return m_totalUnitsDestroyed[idx]; }
-	Int getBuildingsDestroyedByPlayer( Int idx ) const { return m_totalBuildingsDestroyed[idx]; }
+	Int getUnitsDestroyedByPlayer( Int idx ) const { return (idx >= 0 && idx < MAX_PLAYER_COUNT) ? m_totalUnitsDestroyed[idx] : 0; }
+	Int getBuildingsDestroyedByPlayer( Int idx ) const { return (idx >= 0 && idx < MAX_PLAYER_COUNT) ? m_totalBuildingsDestroyed[idx] : 0; }
 	const ObjectCountMap& getObjectsBuilt() const { return m_objectsBuilt; }
 	const ObjectCountMap* getObjectsDestroyedArray() const { return m_objectsDestroyed; }
 	const ObjectCountMap& getObjectsLost() const { return m_objectsLost; }
