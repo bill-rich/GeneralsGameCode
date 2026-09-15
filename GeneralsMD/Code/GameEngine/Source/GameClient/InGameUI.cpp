@@ -6517,6 +6517,13 @@ void InGameUI::drawObserverStats(Int & x, Int & y)
 	if (moneyWin && !moneyWin->winIsHidden())
 		return;
 
+	// TheSuperHackers @feature bill-rich 15/09/2026 The stats table sits on the bottom
+	// edge, over the production queue row of the control bar. While the viewer has
+	// something selected the owner's control bar is what they asked to see, so the
+	// table steps aside; deselect (Esc) and it is back.
+	if (isViewerOnlyClient() && TheInGameUI->getSelectCount() > 0)
+		return;
+
 	if (!TheInGameUI->getInputEnabled() || TheGameLogic->isIntroMoviePlaying() ||
 		TheGameLogic->isLoadingMap() || TheInGameUI->isQuitMenuVisible())
 		return;
