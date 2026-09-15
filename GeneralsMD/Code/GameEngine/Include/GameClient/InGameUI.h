@@ -612,6 +612,8 @@ private:
 	void drawSystemTime(Int& x, Int& y);
 	void drawGameTime();
 	void drawPlayerInfoList();
+	void updateHuntedPlayers();				///< refresh the cached per-player hunted state and announce transitions
+	UnicodeString formatHuntedSuffix(Int playerIndex) const; ///< " HUNTED m:ss" or empty
 	void drawObserverStats(Int &x, Int &y);
 	Bool m_observerStatsHidden = false;   // hide/show observer overlay
 
@@ -702,6 +704,8 @@ protected:
 		Bool showPower;
 		Bool lowPower;
 		Color color;
+		Bool hunted;					///< player can no longer rebuild (viewer-only, see updateHuntedPlayers)
+		Int huntedSeconds;		///< how long they have been hunted
 	};
 
 	struct MoveHintStruct
@@ -927,6 +931,17 @@ protected:
 		DisplayString* values[ValueType_Count][MAX_PLAYER_COUNT];
 		LastValues lastValues;
 	};
+
+	//
+	// TheSuperHackers @feature bill-rich 15/09/2026 Cached "hunted" state (player can no longer rebuild),
+	// one entry per player index. Recomputed once a second rather than per frame
+	// because the check walks every object a player owns. Only maintained for
+	// viewer-only clients: for anyone still playing it would leak that an opponent
+	// has no dozers left.
+	//
+	Bool													m_playerHunted[MAX_PLAYER_COUNT];
+	UnsignedInt										m_playerHuntedSinceFrame[MAX_PLAYER_COUNT];
+	UnsignedInt										m_nextHuntedEvalFrame;
 
 	PlayerInfoList								m_playerInfoList;
 	AsciiString										m_playerInfoListFont;

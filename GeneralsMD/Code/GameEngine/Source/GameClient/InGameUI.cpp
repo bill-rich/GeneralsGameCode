@@ -1147,6 +1147,14 @@ InGameUI::InGameUI()
 	m_cameoVideoStream = nullptr;
 	m_cameoVideoBuffer = nullptr;
 
+	// hunted-player cache (viewer only)
+	for( i = 0; i < MAX_PLAYER_COUNT; i++ )
+	{
+		m_playerHunted[ i ] = FALSE;
+		m_playerHuntedSinceFrame[ i ] = 0;
+	}
+	m_nextHuntedEvalFrame = 0;
+
 	// message info
 	for (i = 0; i < MAX_UI_MESSAGES; i++)
 	{
@@ -1920,6 +1928,9 @@ void InGameUI::update()
 		}
 	}
 
+	// viewer-only: refresh who can no longer rebuild, and announce any change
+	updateHuntedPlayers();
+
 	//
 	// remove any message strings that have expired, note that the oldest strings are
 	// always at the end of the array (higher index numbers) so we can just remove things
@@ -2214,6 +2225,13 @@ void InGameUI::reset()
 {
 	m_isQuitMenuVisible = FALSE;
 	m_inputEnabled = true;
+
+	for (Int hp = 0; hp < MAX_PLAYER_COUNT; ++hp)
+	{
+		m_playerHunted[hp] = FALSE;
+		m_playerHuntedSinceFrame[hp] = 0;
+	}
+	m_nextHuntedEvalFrame = 0;
 	// reset the command bar
 	TheControlBar->reset();
 
@@ -6502,6 +6520,146 @@ void InGameUI::notifySpecialPowerUsed(Player* player, const SpecialPowerTemplate
 	addObserverNotificationRaw(msg, player->getPlayerColor());
 }
 
+
+//-----------------------------------------------------------------------------
+// TheSuperHackers @feature bill-rich 15/09/2026 "Hunted" detection for viewers: a player is hunted
+// once they have lost the ability to rebuild: no dozer/worker unit alive, and no
+// completed structure whose command set can produce one (command centers for
+// every faction, plus the GLA supply stash). Capability is checked from command
+// sets rather than faction lists so captured cross-faction structures and stolen
+// dozers count naturally (and can make a player un-hunted again).
+//-----------------------------------------------------------------------------
+struct HuntedCheckData
+{
+	Bool hasBuilder;
+};
+
+static void huntedCheckObjectFn(Object *obj, void *userData)
+{
+	HuntedCheckData *data = (HuntedCheckData *)userData;
+	if (data->hasBuilder || obj == nullptr)
+		return;
+	if (obj->isEffectivelyDead())
+		return;
+
+	if (obj->isKindOf(KINDOF_DOZER))
+	{
+		data->hasBuilder = TRUE;
+		return;
+	}
+
+	// A structure only counts if it is finished, not being sold, and can
+	// queue a dozer-kind unit from its command set.
+	if (obj->getStatusBits().test(OBJECT_STATUS_UNDER_CONSTRUCTION))
+		return;
+	if (obj->getStatusBits().test(OBJECT_STATUS_SOLD))
+		return;
+	if (TheControlBar == nullptr)
+		return;
+	const CommandSet *commandSet = TheControlBar->findCommandSet(obj->getCommandSetString());
+	if (commandSet == nullptr)
+		return;
+	for (Int j = 0; j < MAX_COMMANDS_PER_SET; ++j)
+	{
+		const CommandButton *button = commandSet->getCommandButton(j);
+		if (button == nullptr)
+			continue;
+		if (button->getCommandType() != GUI_COMMAND_UNIT_BUILD)
+			continue;
+		const ThingTemplate *thing = button->getThingTemplate();
+		if (thing != nullptr && thing->isKindOf(KINDOF_DOZER))
+		{
+			data->hasBuilder = TRUE;
+			return;
+		}
+	}
+}
+
+static Bool computePlayerIsHunted(const Player *player)
+{
+	if (player == nullptr)
+		return FALSE;
+
+	HuntedCheckData data;
+	data.hasBuilder = FALSE;
+	player->iterateObjects(huntedCheckObjectFn, &data);
+	return !data.hasBuilder;
+}
+
+//-------------------------------------------------------------------------------------------------
+/** Refresh the cached "hunted" flag for every player and announce the transitions.
+	* Viewer-only. Observers re-simulate every player, so the state is available for everyone on the
+	* map, which is exactly why it must not reach someone still playing. */
+//-------------------------------------------------------------------------------------------------
+void InGameUI::updateHuntedPlayers()
+{
+	if (!isViewerOnlyClient())
+		return;
+	if (ThePlayerList == nullptr || TheGameLogic == nullptr)
+		return;
+
+	const UnsignedInt now = TheGameLogic->getFrame();
+	if (now < m_nextHuntedEvalFrame)
+		return;
+	// The check walks every object a player owns, so sample once a logic second.
+	m_nextHuntedEvalFrame = now + LOGICFRAMES_PER_SECOND;
+
+	AsciiString name;
+	for (Int slotIndex = 0; slotIndex < MAX_SLOTS; ++slotIndex)
+	{
+		name.format("player%d", slotIndex);
+		Player *player = ThePlayerList->findPlayerWithNameKey(TheNameKeyGenerator->nameToKey(name));
+		if (player == nullptr || player->isPlayerObserver())
+			continue;
+
+		const Int playerIndex = player->getPlayerIndex();
+		if (playerIndex < 0 || playerIndex >= MAX_PLAYER_COUNT)
+			continue;
+
+		// Elimination destroys a player's objects, so a dead player trivially reads as
+		// hunted. Clear it silently: they are out, which the viewer can already see.
+		if (player->isPlayerDead())
+		{
+			m_playerHunted[playerIndex] = FALSE;
+			m_playerHuntedSinceFrame[playerIndex] = 0;
+			continue;
+		}
+
+		const Bool hunted = computePlayerIsHunted(player);
+		if (hunted == m_playerHunted[playerIndex])
+			continue;
+
+		m_playerHunted[playerIndex] = hunted;
+		m_playerHuntedSinceFrame[playerIndex] = hunted ? now : 0;
+
+		const UnicodeString announcement = hunted
+			? TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:ObserverPlayerHunted",
+					L"%ls is hunted", player->getPlayerDisplayName().str())
+			: TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:ObserverPlayerUnhunted",
+					L"%ls is no longer hunted", player->getPlayerDisplayName().str());
+
+		RGBColor rgb;
+		rgb.setFromInt(player->getPlayerColor());
+		messageNoFormat(&rgb, announcement);
+	}
+}
+
+//-------------------------------------------------------------------------------------------------
+/** " HUNTED m:ss" for a hunted player, empty otherwise. How long they have held out matters as
+	* much as the fact: most are dead within a minute, so the ones that are not are the story. */
+//-------------------------------------------------------------------------------------------------
+UnicodeString InGameUI::formatHuntedSuffix(Int playerIndex) const
+{
+	UnicodeString suffix;
+	if (playerIndex < 0 || playerIndex >= MAX_PLAYER_COUNT || !m_playerHunted[playerIndex] || TheGameLogic == nullptr)
+		return suffix;
+	const UnsignedInt heldFrames = TheGameLogic->getFrame() - m_playerHuntedSinceFrame[playerIndex];
+	const Int heldSeconds = (Int)(heldFrames / LOGICFRAMES_PER_SECOND);
+	suffix = TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:ObserverHuntedSuffix",
+		L" HUNTED %d:%02d", heldSeconds / 60, heldSeconds % 60);
+	return suffix;
+}
+
 void InGameUI::drawObserverStats(Int & x, Int & y)
 {
 	// do we need to re-create our fonts?
@@ -6659,7 +6817,10 @@ void InGameUI::drawObserverStats(Int & x, Int & y)
 					p->getSciencePurchasePoints(),
 					powerDelta, hasPower,
 					energy && !energy->hasSufficientPower(),
-					p->getPlayerColor()
+					p->getPlayerColor(),
+					(Bool)(p->getPlayerIndex() >= 0 && p->getPlayerIndex() < MAX_PLAYER_COUNT && m_playerHunted[p->getPlayerIndex()]),
+					(p->getPlayerIndex() >= 0 && p->getPlayerIndex() < MAX_PLAYER_COUNT && m_playerHunted[p->getPlayerIndex()])
+						? (Int)((TheGameLogic->getFrame() - m_playerHuntedSinceFrame[p->getPlayerIndex()]) / LOGICFRAMES_PER_SECOND) : 0
 			};
 
 			setTeams.insert(team);
@@ -6695,6 +6856,10 @@ void InGameUI::drawObserverStats(Int & x, Int & y)
                         cells[0].format(L"(%d) %ls", pd.team + 1, pd.name.str());
                         cells[1] = pd.faction;
                         cells[2] = formatNum(pd.money);
+                        // hunted players carry a running clock on the money cell
+                        if (pd.hunted)
+                            cells[2].concat(TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:ObserverHuntedSuffix",
+                                L" HUNTED %d:%02d", pd.huntedSeconds / 60, pd.huntedSeconds % 60));
                         cells[3].format(L"+%ls", formatNum(pd.cpm).str());
                         cells[4].format(L"(%d) %d", pd.rank, pd.xp);
                         cells[5].format(L"%d", pd.sp);
@@ -7316,6 +7481,7 @@ void InGameUI::drawPlayerInfoList()
 		const UnicodeString nameValue = player->getPlayerDisplayName();
 
 		const UnsignedInt currentValues[] = { teamValue, moneyValue, moneyPerMinuteValue, rankValue, xpValue };
+		const UnicodeString huntedSuffix = formatHuntedSuffix(player->getPlayerIndex());
 		for (column = 0; column < ARRAY_SIZE(currentValues); ++column)
 		{
 			UnsignedInt& lastValue = m_playerInfoList.lastValues.values[column][row];
@@ -7327,6 +7493,15 @@ void InGameUI::drawPlayerInfoList()
 						continue;
 
 					playerInfoListValue = formatIncomeValue(currentValues[column]);
+				}
+				else if (column == PlayerInfoList::ValueType_Money && !huntedSuffix.isEmpty())
+				{
+					// hunted players carry a running clock on the money cell; the clock
+					// ticks while the money may not, so bypass the unchanged-value cache
+					playerInfoListValue.format(L"%u%ls", currentValues[column], huntedSuffix.str());
+					m_playerInfoList.values[column][row]->setText(playerInfoListValue);
+					lastValue = (UnsignedInt)-1;
+					continue;
 				}
 				else
 				{
