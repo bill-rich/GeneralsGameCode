@@ -222,6 +222,9 @@ static GameWindow *buttonBack = NULL;
 static GameWindow *buttonStart = NULL;
 static GameWindow *buttonSelectMap = NULL;
 static GameWindow *buttonRandomize = NULL;
+// TheSuperHackers @feature bill-rich 15/09/2026 How many times the host pressed Randomize in this
+// lobby; announced with every roll so re-rolling is visible to everyone present.
+static Int s_randomizeCount = 0;
 static GameWindow *buttonEmote = NULL;
 static GameWindow *textEntryChat = NULL;
 static GameWindow *textEntryMapDisplay = NULL;
@@ -1568,7 +1571,7 @@ void InitWOLGameGadgets()
   {
     checkBoxLimitSuperweapons->winEnable( false );
     comboBoxStartingCash->winEnable( false );
-    buttonRandomize->winEnable( false );
+    if (buttonRandomize) buttonRandomize->winEnable( false );
 		NameKeyType labelID = TheNameKeyGenerator->nameToKey("GameSpyGameOptionsMenu.wnd:StartingCashLabel");
 		TheWindowManager->winGetWindowFromId(parentWOLGameSetup, labelID)->winEnable( FALSE );
   }
@@ -1577,7 +1580,7 @@ void InitWOLGameGadgets()
   {
 	  checkBoxLimitSuperweapons->winEnable(true);
 	  comboBoxStartingCash->winEnable(true);
-	  buttonRandomize->winEnable(true);
+	  if (buttonRandomize) buttonRandomize->winEnable(true);
   }
 #endif
 
@@ -1590,7 +1593,7 @@ void InitWOLGameGadgets()
 		checkBoxLimitSuperweapons->winEnable( FALSE );
 		comboBoxStartingCash->winEnable( FALSE );
 		checkBoxLimitArmies->winEnable( FALSE );
-		buttonRandomize->winEnable( FALSE );
+		if (buttonRandomize) buttonRandomize->winEnable( FALSE );
 		NameKeyType labelID = TheNameKeyGenerator->nameToKey("GameSpyGameOptionsMenu.wnd:StartingCashLabel");
 		TheWindowManager->winGetWindowFromId(parentWOLGameSetup, labelID)->winEnable( FALSE );
 	}
@@ -1770,6 +1773,7 @@ Bool initialAcceptEnable = FALSE;
 //-------------------------------------------------------------------------------------------------
 void WOLGameSetupMenuInit( WindowLayout *layout, void *userData )
 {
+	s_randomizeCount = 0;
 	NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
 	if (pLobbyInterface == nullptr)
 	{
@@ -2128,7 +2132,7 @@ void WOLGameSetupMenuInit( WindowLayout *layout, void *userData )
 		buttonStart->winSetText(TheGameText->fetch("GUI:Accept"));
 		buttonStart->winEnable( FALSE );
 		buttonSelectMap->winEnable( FALSE );
-		buttonRandomize->winEnable( FALSE );
+		if (buttonRandomize) buttonRandomize->winEnable( FALSE );
 		initialAcceptEnable = FALSE;
 
 		WOLDisplaySlotList();
@@ -2413,7 +2417,7 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 							buttonStart->winSetText(TheGameText->fetch("GUI:Start"));
 							buttonStart->winEnable(TRUE);
 							buttonSelectMap->winEnable(TRUE);
-							buttonRandomize->winEnable(TRUE);
+							if (buttonRandomize) buttonRandomize->winEnable(TRUE);
 							initialAcceptEnable = TRUE;
 
 							comboBoxStartingCash->winEnable(TRUE);
@@ -4022,6 +4026,8 @@ WindowMsgHandledType WOLGameSetupMenuSystem( GameWindow *window, UnsignedInt msg
 				}
 				else if ( controlID == buttonRandomizeID )
 				{
+					// TheSuperHackers @feature bill-rich 15/09/2026 host-only Randomize: resolve the random slots,
+					// push them to the lobby service and tell the room it happened.
 					NGMP_OnlineServices_LobbyInterface* pLobbyInterface = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LobbyInterface>();
 					if (pLobbyInterface != nullptr && pLobbyInterface->IsHost())
 					{
@@ -4032,6 +4038,11 @@ WindowMsgHandledType WOLGameSetupMenuSystem( GameWindow *window, UnsignedInt msg
 							performRandomAssign(game, lockedTemplates);
 							pLobbyInterface->UpdateCurrentLobby_BulkSlotUpdate(game);
 							WOLDisplaySlotList();
+
+							++s_randomizeCount;
+							UnicodeString strInform;
+							strInform.format(TheGameText->FETCH_OR_SUBSTITUTE("GUI:HostRandomizedSlots", L"Host randomized factions, colors and start positions (roll %d)"), s_randomizeCount);
+							pLobbyInterface->SendAnnouncementMessageToCurrentLobby(strInform, true);
 						}
 					}
 				}
