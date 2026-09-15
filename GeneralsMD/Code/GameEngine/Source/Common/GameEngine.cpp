@@ -932,7 +932,11 @@ Bool GameEngine::canUpdateRegularGameLogic(UnsignedInt logicTimeQueryFlags)
 	const Bool useFastMode = TheGlobalData->m_TiVOFastMode && TheGameLogic->isInReplayGame();
 #endif
 
-	if (useFastMode || logicTimeScaleFps >= maxRenderFps)
+	// TheSuperHackers @feature bill-rich 15/09/2026 a live observer draining its snapshot must not be
+	// throttled to realtime by the logic time scale
+	const Bool inLiveObserverCatchup = TheRecorder && TheRecorder->isLiveObserverCatchup();
+
+	if (useFastMode || inLiveObserverCatchup || logicTimeScaleFps >= maxRenderFps)
 	{
 		// Logic time scale is uncapped or larger equal Render FPS. Update straight away.
 		return true;

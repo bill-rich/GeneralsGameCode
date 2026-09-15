@@ -3976,6 +3976,33 @@ void GameLogic::update()
 
 	PROFILER_PLOT("LogicFrame", static_cast<int64_t>(now));
 
+	// TheSuperHackers @feature bill-rich 15/09/2026 Live observing: while the recorder is waiting for more
+	// bytes from the stream, pump only the recorder this tick. Everything below has
+	// side effects on RNG and object state, and running it again on the same frame
+	// would advance local state past the streamer's and desync the viewer. Never let
+	// the wait block the local exit path: a pending MSG_CLEAR_GAME_DATA still gets a
+	// full tick so processCommandList can act on it.
+	Bool recorderUpdatedAtTop = FALSE;
+	if (TheRecorder && TheRecorder->isLiveObserverMode() && TheRecorder->isLiveObserverWaitingForBytes())
+	{
+		TheRecorder->UPDATE();
+		recorderUpdatedAtTop = TRUE;
+		if (TheRecorder->isLiveObserverWaitingForBytes())
+		{
+			Bool quitPending = FALSE;
+			for (GameMessage *msg = TheCommandList->getFirstMessage(); msg; msg = msg->next())
+			{
+				if (msg->getType() == GameMessage::MSG_CLEAR_GAME_DATA)
+				{
+					quitPending = TRUE;
+					break;
+				}
+			}
+			if (!quitPending)
+				return;
+		}
+	}
+
 	// update (execute) scripts
 	{
 		TheScriptEngine->UPDATE();
@@ -4032,6 +4059,7 @@ void GameLogic::update()
 	}
 
 	// Update the Recorder
+	if (!recorderUpdatedAtTop)
 	{
 		TheRecorder->UPDATE();
 	}
