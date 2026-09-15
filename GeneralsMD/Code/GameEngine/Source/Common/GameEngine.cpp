@@ -972,6 +972,18 @@ void GameEngine::update()
 {
 	USE_PERF_TIMER(GameEngine_update)
 	{
+		// -liveReplay: once the shell is up, start watching the growing replay file. Started
+		// from here rather than at init so it goes through the same teardown a replay
+		// started from the menu does.
+		if (!TheGlobalData->m_liveReplayFile.isEmpty() && TheRecorder && TheShell && TheShell->isShellActive() && TheShell->top() != nullptr
+			&& TheGameLogic && !TheGameLogic->isLoadingMap())
+		{
+			AsciiString liveFile = TheGlobalData->m_liveReplayFile;
+			TheWritableGlobalData->m_liveReplayFile.clear();
+			TheRecorder->setLiveObserverStreamOpen(TRUE);
+			TheRecorder->playbackFileLiveObserver(liveFile);
+		}
+
 		{
 			// VERIFY CRC needs to be in this code block.  Please to not pull TheGameLogic->update() inside this block.
 			VERIFY_CRC

@@ -439,6 +439,22 @@ Int parseStatsUrl(char *args[], int num)
 	return 1;
 }
 
+// TheSuperHackers @feature bill-rich 15/09/2026 -liveReplay <file.rep>: watch a replay that is still being written to, as
+// a live observer would. The file is opened from the Replays folder and played back
+// in RECORDERMODETYPE_LIVE_OBSERVER: end of file means wait for more bytes. Meant for
+// stream transports that append to a local file, and for testing that playback path.
+Int parseLiveReplay(char *args[], int num)
+{
+	if (num > 1)
+	{
+		TheWritableGlobalData->m_liveReplayFile = args[1];
+		TheWritableGlobalData->m_playIntro = FALSE;
+		TheWritableGlobalData->m_playSizzle = FALSE;
+		TheWritableGlobalData->m_shellMapOn = FALSE;
+	}
+	return 2;
+}
+
 Int parseReplay(char *args[], int num)
 {
 	if (num > 1)
@@ -1158,6 +1174,7 @@ static CommandLineParam paramsForStartup[] =
 	// You can pass this multiple times to play back multiple replays.
 	// You can also include wildcards. The file must be in the replay folder or in a subfolder.
 	{ "-replay", parseReplay },
+	{ "-liveReplay", parseLiveReplay },
 
 	// TheSuperHackers @feature helmutbuhler 23/05/2025
 	// Simulate each replay in a separate process and use 1..N processes at the same time.

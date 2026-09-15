@@ -1005,6 +1005,7 @@ GlobalData::GlobalData()
 	m_pendingFile.clear();
 
 	m_simulateReplays.clear();
+	m_liveReplayFile.clear();
 	m_simulateReplayJobs = SIMULATE_REPLAYS_SEQUENTIAL;
 
 	for (i = LEVEL_FIRST; i <= LEVEL_LAST; ++i)
