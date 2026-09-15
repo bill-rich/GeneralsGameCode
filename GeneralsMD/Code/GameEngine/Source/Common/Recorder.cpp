@@ -1485,7 +1485,9 @@ Bool RecorderClass::readReplayBytes(void *dst, Int size) {
  */
 void RecorderClass::rollbackTornRecord(Int posBefore) {
 	if (isLiveObserverMode() && m_liveObserverStreamOpen) {
-		m_liveObserverRetryPos        = posBefore;
+		// posBefore is the start of the record body; its frame number sits just before it
+		// and the retry in updatePlayback re-reads the frame number first, so rewind past it.
+		m_liveObserverRetryPos        = posBefore - (Int)sizeof(m_nextFrame);
 		m_liveObserverWaitingForBytes = TRUE;
 	}
 }
