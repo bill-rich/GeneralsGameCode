@@ -202,3 +202,9 @@ protected:
 
 extern RecorderClass *TheRecorder;
 RecorderClass *createRecorder();
+
+// TheSuperHackers @feature bill-rich 15/09/2026 Observers and replay viewers get the owning player's
+// control bar (production queues, garrison contents, construction progress) in
+// read-only form. True when the local client is watching a game it does not
+// control: any playback mode, or a local player sitting in an observer slot.
+Bool isViewerOnlyClient();

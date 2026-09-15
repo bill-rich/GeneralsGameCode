@@ -864,7 +864,7 @@ protected:
 	void populateSpecialPowerShortcut( Player *player);
 	void updateSpecialPowerShortcut();
 
-	static const Image* calculateVeterancyOverlayForThing( const ThingTemplate *thingTemplate );
+	static const Image* calculateVeterancyOverlayForThing( const ThingTemplate *thingTemplate, const Player *player );
 	static const Image* calculateVeterancyOverlayForObject( const Object *obj );
 
 	// the following methods do command processing for GUI selections
