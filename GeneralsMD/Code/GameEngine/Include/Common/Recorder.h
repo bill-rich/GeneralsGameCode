@@ -215,6 +215,7 @@ protected:
 	UnsignedInt m_nextFrame;												///< The Frame that the next message is to be executed on.  This can be -1.
 
 	Bool m_replayShortRead;													///< set when a record could not be read in full
+	Int  m_replayReadPos;														///< bytes consumed from the replay so far; File::position() is not reliable on every file class
 
 	// live-observer state (see isLiveObserverMode). m_liveObserverStreamOpen is
 	// owned by the stream transport; m_liveObserverArming covers the open-time

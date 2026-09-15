@@ -374,6 +374,8 @@ RecorderClass::~RecorderClass() {
  * will set the recorder mode to RECORDERMODETYPE_PLAYBACK.
  */
 void RecorderClass::init() {
+	if (m_mode == RECORDERMODETYPE_LIVE_OBSERVER)
+		OBS_LOG("LiveObserver: recorder init() while live observing, state wiped");
 	m_originalGameMode = GAME_NONE;
 	m_mode = RECORDERMODETYPE_NONE;
 	m_file = nullptr;
@@ -391,6 +393,7 @@ void RecorderClass::init() {
 	m_playbackFrameCount = 0;
 
 	m_replayShortRead             = FALSE;
+	m_replayReadPos               = 0;
 	m_liveObserverStreamOpen      = FALSE;
 	m_liveObserverArming          = FALSE;
 	m_liveObserverWaitingForBytes = FALSE;
@@ -498,6 +501,9 @@ void RecorderClass::updatePlayback() {
 		AsciiString fname = m_file->getName();
 		m_file->close();
 		m_file = TheFileSystem->openFile(fname.str(), File::READ | File::BINARY);
+		static UnsignedInt s_retryLogged = 0;
+		if (s_retryLogged++ < 5)
+			OBS_LOG("LiveObserver: retry reopen '%s' -> %s, seek %d, frame %u", fname.str(), m_file ? "ok" : "FAILED", m_liveObserverRetryPos, TheGameLogic->getFrame());
 		if (m_file == nullptr)
 		{
 			OBS_LOG("LiveObserver: could not reopen %s", fname.str());
@@ -506,6 +512,7 @@ void RecorderClass::updatePlayback() {
 			return;
 		}
 		m_file->seek(m_liveObserverRetryPos, File::START);
+		m_replayReadPos = m_liveObserverRetryPos;
 		// Retry the read. If it still fails, readNextFrame re-arms the wait and we try
 		// again next tick.
 		m_liveObserverWaitingForBytes = FALSE;
@@ -1104,6 +1111,13 @@ Bool RecorderClass::playbackFileLiveObserver(AsciiString filename)
 	}
 
 	m_mode = RECORDERMODETYPE_LIVE_OBSERVER;
+	// Seed the tracked read offset from the file, which is reliable right after the
+	// open; from here on every read updates it, since File::position() is not
+	// trustworthy on every file class once reads have failed.
+	if (m_file != nullptr && !m_liveObserverWaitingForBytes)
+		m_replayReadPos = m_file->position();
+	else if (m_liveObserverWaitingForBytes)
+		m_replayReadPos = m_liveObserverRetryPos;
 	// The open-time read may already have hit EOF (a snapshot of a match that just
 	// started); keep that armed wait so updatePlayback's retry loop picks it up.
 	if (!m_liveObserverWaitingForBytes)
@@ -1445,8 +1459,12 @@ AsciiString RecorderClass::readAsciiString() {
  * is stopped and the next frame is said to be -1.
  */
 void RecorderClass::readNextFrame() {
-	const Int posBefore = m_file->position();
+	// while playbackFile is still opening the file the tracked offset is not seeded yet;
+	// File::position() is reliable at that point
+	const Int posBefore = m_liveObserverArming ? m_file->position() : m_replayReadPos;
 	Int bytesRead = m_file->read(&m_nextFrame, sizeof(m_nextFrame));
+	if (bytesRead > 0)
+		m_replayReadPos += bytesRead;
 	if (bytesRead != sizeof(m_nextFrame)) {
 		// Live observing: the file is still being appended to, so end of file means
 		// "wait for more bytes". m_liveObserverArming covers the open-time read inside
@@ -1458,6 +1476,8 @@ void RecorderClass::readNextFrame() {
 			m_liveObserverWaitingForBytes = TRUE;
 			return;
 		}
+		if (m_mode == RECORDERMODETYPE_LIVE_OBSERVER)
+			OBS_LOG("LiveObserver: EOF at pos %d with stream closed; ending playback (frame %u)", posBefore, TheGameLogic->getFrame());
 		DEBUG_LOG(("RecorderClass::readNextFrame - read failed on frame %d", TheGameLogic->getFrame()));
 		m_nextFrame = -1;
 		stopPlayback();
@@ -1469,6 +1489,8 @@ void RecorderClass::readNextFrame() {
  */
 Bool RecorderClass::readReplayBytes(void *dst, Int size) {
 	const Int bytesRead = m_file->read(dst, size);
+	if (bytesRead > 0)
+		m_replayReadPos += bytesRead;
 	if (bytesRead != size) {
 		m_replayShortRead = TRUE;
 		return FALSE;
@@ -1489,6 +1511,7 @@ void RecorderClass::rollbackTornRecord(Int posBefore) {
 		// and the retry in updatePlayback re-reads the frame number first, so rewind past it.
 		m_liveObserverRetryPos        = posBefore - (Int)sizeof(m_nextFrame);
 		m_liveObserverWaitingForBytes = TRUE;
+		OBS_LOG("LiveObserver: torn record at pos %d (frame %u), will retry", posBefore, m_nextFrame);
 	}
 }
 
@@ -1503,7 +1526,7 @@ void RecorderClass::appendNextCommand() {
 	// be re-read whole later. Previously only the first read was checked and a torn
 	// record left the offset stranded mid-record, feeding argument bytes back in as
 	// frame numbers and message types.
-	const Int posBefore = m_file->position();
+	const Int posBefore = m_replayReadPos;
 	m_replayShortRead = FALSE;
 	GameMessage::Type type;
 	if (!readReplayBytes(&type, sizeof(type))) {
