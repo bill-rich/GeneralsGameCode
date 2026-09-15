@@ -73,7 +73,11 @@ bool isViewerOnlyClient()
 	if (ThePlayerList != nullptr)
 	{
 		const Player* local = ThePlayerList->getLocalPlayer();
-		if (local != nullptr && local->isPlayerObserver())
+		// TheSuperHackers @feature bill-rich 15/09/2026 A defeated player has no army left to
+		// command, so they are as much a viewer as a lobby observer. isPlayerActive() is
+		// false for both, which promotes the dead player to the full viewer UI and extends
+		// the command block in processCommandUI to them.
+		if (local != nullptr && !local->isPlayerActive())
 			return true;
 	}
 	return false;
