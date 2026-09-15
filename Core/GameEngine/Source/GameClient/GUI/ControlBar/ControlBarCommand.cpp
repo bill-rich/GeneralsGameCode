@@ -31,6 +31,7 @@
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 
 #include "Common/NameKeyGenerator.h"
+#include "Common/Recorder.h"
 #include "Common/ThingTemplate.h"
 #include "Common/ThingFactory.h"
 #include "Common/Player.h"
@@ -633,8 +634,9 @@ void ControlBar::populateBuildQueue( Object *producer )
 			//image = TheMappedImageCollection->findImageByName( production->getProductionObject()->getInventoryImageName( INV_IMAGE_PUSHED ) );
 			//GadgetButtonSetHiliteImage( m_queueData[ windowIndex ].control, image );
 
-			//Show the veterancy rank of the object being constructed in the queue
-			const Image *image = calculateVeterancyOverlayForThing( production->getProductionObject() );
+			//Show the veterancy rank of the object being constructed in the queue.
+			// TheSuperHackers @feature bill-rich 15/09/2026 computed for the producer's owner so viewers see the owner's ranks
+			const Image *image = calculateVeterancyOverlayForThing( production->getProductionObject(), producer->getControllingPlayer() );
 			GadgetButtonDrawOverlayImage( m_queueData[ windowIndex ].control, image );
 			//
 			// note we're not setting a disabled image into the queue button ... when there is
@@ -870,7 +872,8 @@ void ControlBar::updateContextCommand()
 		if( command->getCommandType() != GUI_COMMAND_EXIT_CONTAINER )
 		{
 			//Already handled for contained members -- see ControlBar::populateButtonProc()
-			const Image *image = calculateVeterancyOverlayForThing( command->getThingTemplate() );
+			//Computed for the selected object's owner so viewers see the owner's ranks
+			const Image *image = calculateVeterancyOverlayForThing( command->getThingTemplate(), obj->getControllingPlayer() );
 			GadgetButtonDrawOverlayImage( win, image );
 		}
 
@@ -905,7 +908,7 @@ void ControlBar::updateContextCommand()
 }
 
 //-------------------------------------------------------------------------------------------------
-const Image* ControlBar::calculateVeterancyOverlayForThing( const ThingTemplate *thingTemplate )
+const Image* ControlBar::calculateVeterancyOverlayForThing( const ThingTemplate *thingTemplate, const Player *player )
 {
 	VeterancyLevel level = LEVEL_REGULAR;
 
@@ -914,7 +917,6 @@ const Image* ControlBar::calculateVeterancyOverlayForThing( const ThingTemplate 
 		return nullptr;
 	}
 
-	Player *player = ThePlayerList->getLocalPlayer();
 	if( !player )
 	{
 		return nullptr;
@@ -1473,7 +1475,11 @@ CommandAvailability ControlBar::getCommandAvailability( const CommandButton *com
 			for( DrawableListCIt it = selected->begin(); it != selected->end(); ++it )
 			{
 				Drawable *draw = *it;
-				if( draw && draw->getObject() && draw->getObject()->isLocallyControlled() && draw->getObject()->getCurrentWeapon())
+				// viewer-only clients own nothing but should still see which
+				// weapon the owner has active
+				if( draw && draw->getObject() &&
+						( draw->getObject()->isLocallyControlled() || isViewerOnlyClient() ) &&
+						draw->getObject()->getCurrentWeapon())
 				{
 					WeaponSlotType wslot = draw->getObject()->getCurrentWeapon()->getWeaponSlot();
 					if (wslot != command->getWeaponSlot())

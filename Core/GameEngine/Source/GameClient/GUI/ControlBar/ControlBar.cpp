@@ -1455,6 +1455,72 @@ void ControlBar::update()
 		if((TheGameLogic->getFrame() % (LOGICFRAMES_PER_SECOND/2)) == 0)
 			populateObserverInfoWindow();
 
+		//
+		// TheSuperHackers @feature bill-rich 15/09/2026
+		// viewer-only clients (replay playback and observers) run the
+		// regular context-sensitive UI for the current selection so they see
+		// exactly what the owning player would see: command buttons with real
+		// availability, production queues, garrison contents, construction
+		// progress. Command issuance is blocked in processCommandUI.
+		//
+		if( isViewerOnlyClient() )
+		{
+			if( TheInGameUI->getSelectCount() == 0 )
+			{
+				// nothing selected: bring the observer windows back if an object
+				// context hid them, restoring the info window when we were
+				// looking at a specific player
+				if( m_currContext != CB_CONTEXT_OBSERVER_LIST )
+				{
+					switchToContext( CB_CONTEXT_OBSERVER_LIST, nullptr );
+					if( m_observerLookAtPlayer )
+					{
+						m_contextParent[ CP_OBSERVER_LIST ]->winHide( TRUE );
+						m_contextParent[ CP_OBSERVER_INFO ]->winHide( FALSE );
+						populateObserverInfoWindow();
+					}
+					showRallyPoint( nullptr );
+				}
+				m_UIDirty = FALSE;
+				return;
+			}
+
+			if( m_UIDirty )
+				evaluateContextUI();
+
+			if( m_currContext == CB_CONTEXT_MULTI_SELECT )
+			{
+				updateContextMultiSelect();
+				return;
+			}
+
+			if( m_currentSelectedDrawable == nullptr ||
+					m_currentSelectedDrawable->getObject() == nullptr )
+				return;
+
+			switch( m_currContext )
+			{
+				case CB_CONTEXT_COMMAND:
+					updateContextCommand();
+					break;
+				case CB_CONTEXT_STRUCTURE_INVENTORY:
+					updateContextStructureInventory();
+					break;
+				case CB_CONTEXT_BEACON:
+					updateContextBeacon();
+					break;
+				case CB_CONTEXT_UNDER_CONSTRUCTION:
+					updateContextUnderConstruction();
+					break;
+				case CB_CONTEXT_OCL_TIMER:
+					updateContextOCLTimer();
+					break;
+				default:
+					break;
+			}
+			return;
+		}
+
 		Drawable *drawToEvaluateFor = nullptr;
 		if( TheInGameUI->getSelectCount() > 1 )
 		{
@@ -1773,7 +1839,10 @@ void ControlBar::evaluateContextUI()
 	//we don't show any GUI commands for them!!!
 	//This is used when we select enemy objects or objects on another team.
 	//@todo we may want to show their portrait
-	if( !TheInGameUI->areSelectedObjectsControllable() )
+	// TheSuperHackers @feature bill-rich 15/09/2026 Observers / replay viewers always fall
+	// through to the regular evaluation below so they can see production queues
+	// and garrison contents.
+	if( !TheInGameUI->areSelectedObjectsControllable() && !isViewerOnlyClient() )
 	{
 		//Also make sure the unit isn't a garrisonable neutral civ team building!
 		Drawable *draw = selectedDrawables->front();
@@ -1917,7 +1986,7 @@ void ControlBar::evaluateContextUI()
 
 				// we cannot select objects that are controlled by our enemies
 				relationship = localPlayer->getRelationship( obj->getTeam() );
-				if( obj->isLocallyControlled() == TRUE || relationship == NEUTRAL )
+				if( obj->isLocallyControlled() == TRUE || relationship == NEUTRAL || isViewerOnlyClient() )
 					switchToContext( CB_CONTEXT_STRUCTURE_INVENTORY, drawToEvaluateFor );
 
 			}
@@ -1931,7 +2000,10 @@ void ControlBar::evaluateContextUI()
 				switchToContext( CB_CONTEXT_COMMAND, drawToEvaluateFor );
 
 			}
-			else if (obj->getControllingPlayer()->getPlayerTemplate()
+			// viewer-only clients can reach here for objects owned by anyone,
+			// including neutral players without a player template
+			else if (obj->getControllingPlayer()
+				&& obj->getControllingPlayer()->getPlayerTemplate()
 				&& obj->getControllingPlayer()->getPlayerTemplate()->getBeaconTemplate().compare(obj->getTemplate()->getName()) == 0)
 			{
 				switchToContext( CB_CONTEXT_BEACON, drawToEvaluateFor );
