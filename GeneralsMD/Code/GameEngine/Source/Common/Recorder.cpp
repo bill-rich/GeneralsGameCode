@@ -31,6 +31,13 @@
 #include "Common/Player.h"
 #include "Common/GlobalData.h"
 #include "Common/GameEngine.h"
+#include "Common/FramePacer.h"
+#if defined(GENERALS_ONLINE)
+#include "GameNetwork/GeneralsOnline/NGMP_include.h"
+#define OBS_LOG(...) NetworkLog(ELogVerbosity::LOG_RELEASE, __VA_ARGS__)
+#else
+#define OBS_LOG(...) DEBUG_LOG((__VA_ARGS__))
+#endif
 #include "GameClient/ClientInstance.h"
 #include "GameClient/GameWindow.h"
 #include "GameClient/GameWindowManager.h"
@@ -383,6 +390,15 @@ void RecorderClass::init() {
 	m_doingAnalysis = FALSE;
 	m_playbackFrameCount = 0;
 
+	m_replayShortRead             = FALSE;
+	m_liveObserverStreamOpen      = FALSE;
+	m_liveObserverArming          = FALSE;
+	m_liveObserverWaitingForBytes = FALSE;
+	m_liveObserverRetryPos        = 0;
+	m_liveObserverFpsBoosted      = FALSE;
+	m_liveObserverSavedFpsLimit   = 0;
+	m_liveObserverStarvedSinceMs  = 0;
+
 	OptionPreferences optionPref;
 	m_archiveReplays = optionPref.getArchiveReplaysEnabled();
 }
@@ -405,6 +421,17 @@ void RecorderClass::reset() {
  * Do the update for this frame.
  */
 void RecorderClass::update() {
+	// TheSuperHackers @feature bill-rich 15/09/2026 Live observing: keep the replay fast-forward off. Racing
+	// past the live edge would starve playback and desync the viewer from the
+	// stream; the snapshot is already drained at a boosted rate.
+	if (m_mode == RECORDERMODETYPE_LIVE_OBSERVER && TheGlobalData && TheGlobalData->m_TiVOFastMode)
+	{
+		TheWritableGlobalData->m_TiVOFastMode = FALSE;
+		if (TheInGameUI)
+			TheInGameUI->messageNoFormat(TheGameText->FETCH_OR_SUBSTITUTE("GUI:LiveObserverNoFF",
+				L"Fast Forward is unavailable while observing a live game."));
+	}
+
 	if (m_mode == RECORDERMODETYPE_RECORD || m_mode == RECORDERMODETYPE_NONE) {
 		updateRecord();
 	}
@@ -429,6 +456,65 @@ void RecorderClass::updatePlayback() {
 		return;
 	}
 
+	// TheSuperHackers @feature bill-rich 15/09/2026 Live observing: if the last read hit the end of the
+	// growing file, retry now. New bytes appended by the stream are not visible to
+	// the engine File's buffered reader until it is closed and reopened.
+	if (isLiveObserverMode() && m_liveObserverWaitingForBytes)
+	{
+		if (!m_liveObserverStreamOpen)
+		{
+			// the stream ended: the match is over, finish like a normal replay
+			OBS_LOG("LiveObserver: stream closed at the live edge; ending playback");
+			m_liveObserverWaitingForBytes = FALSE;
+			m_nextFrame = -1;
+			stopPlayback();
+			return;
+		}
+		// A live match always produces bytes within seconds (logic CRC messages are
+		// recorded on an interval even when nobody issues orders), so a long silence
+		// with the stream still open means the host is gone. The window has to cover
+		// the longest legitimate silence: watching a match from its first seconds means
+		// waiting through the host's whole blocking map load before the first command.
+		const UnsignedInt LIVE_OBSERVER_STARVATION_TIMEOUT_MS = 120000;
+		const UnsignedInt nowMs = timeGetTime();
+		if (m_liveObserverStarvedSinceMs == 0)
+		{
+			m_liveObserverStarvedSinceMs = nowMs;
+		}
+		else if (nowMs - m_liveObserverStarvedSinceMs > LIVE_OBSERVER_STARVATION_TIMEOUT_MS)
+		{
+			OBS_LOG("LiveObserver: starved for %u ms with the stream open; ending playback", nowMs - m_liveObserverStarvedSinceMs);
+			m_liveObserverWaitingForBytes = FALSE;
+			m_nextFrame = -1;
+			stopPlayback();
+			return;
+		}
+		if (m_file == nullptr)
+		{
+			m_liveObserverWaitingForBytes = FALSE;
+			m_nextFrame = -1;
+			return;
+		}
+		AsciiString fname = m_file->getName();
+		m_file->close();
+		m_file = TheFileSystem->openFile(fname.str(), File::READ | File::BINARY);
+		if (m_file == nullptr)
+		{
+			OBS_LOG("LiveObserver: could not reopen %s", fname.str());
+			m_liveObserverWaitingForBytes = FALSE;
+			m_nextFrame = -1;
+			return;
+		}
+		m_file->seek(m_liveObserverRetryPos, File::START);
+		// Retry the read. If it still fails, readNextFrame re-arms the wait and we try
+		// again next tick.
+		m_liveObserverWaitingForBytes = FALSE;
+		readNextFrame();
+		if (m_liveObserverWaitingForBytes)
+			return;
+		m_liveObserverStarvedSinceMs = 0;
+	}
+
 	if (m_nextFrame == -1) {
 		// This is reached if there are no more commands to be executed.
 		return;
@@ -441,6 +527,18 @@ void RecorderClass::updatePlayback() {
 	while (m_nextFrame == curFrame) {
 		appendNextCommand();	// append the next command to TheCommandQueue
 		readNextFrame();	// Read the next command's frame number for playback.
+		// live observing: the file ran out mid-frame, let the retry path run next tick
+		if (isLiveObserverMode() && m_liveObserverWaitingForBytes)
+			break;
+	}
+
+	// Live observing: the first EOF means the snapshot is drained and we are at the
+	// live edge. Drop the frame rate back to normal so we stop racing ahead.
+	if (isLiveObserverMode() && m_liveObserverWaitingForBytes && m_liveObserverFpsBoosted && TheFramePacer)
+	{
+		OBS_LOG("LiveObserver: caught up to the live edge at frame %u; restoring FPS limit %d", TheGameLogic->getFrame(), m_liveObserverSavedFpsLimit);
+		TheFramePacer->setFramesPerSecondLimit(m_liveObserverSavedFpsLimit);
+		m_liveObserverFpsBoosted = FALSE;
 	}
 }
 
@@ -988,6 +1086,50 @@ Bool RecorderClass::analyzeReplay(AsciiString filename)
 
 #endif
 
+/**
+ * TheSuperHackers @feature bill-rich 15/09/2026 Start live observing: normal playbackFile(), then flip to
+ * LIVE_OBSERVER and boost the frame rate while the snapshot is drained. The stream
+ * transport must have opened the file and call setLiveObserverStreamOpen(FALSE) when
+ * the stream ends.
+ */
+Bool RecorderClass::playbackFileLiveObserver(AsciiString filename)
+{
+	m_liveObserverArming = TRUE;
+	Bool success = playbackFile(filename);
+	m_liveObserverArming = FALSE;
+	if (!success)
+	{
+		OBS_LOG("LiveObserver: playbackFile(%s) failed", filename.str());
+		return FALSE;
+	}
+
+	m_mode = RECORDERMODETYPE_LIVE_OBSERVER;
+	// The open-time read may already have hit EOF (a snapshot of a match that just
+	// started); keep that armed wait so updatePlayback's retry loop picks it up.
+	if (!m_liveObserverWaitingForBytes)
+		m_liveObserverRetryPos = 0;
+	// playbackFile() tears the shell down (clearGameData -> reset -> init), which
+	// wiped the flag the transport set before calling us. Playback is only ever
+	// started from a connected stream, and the transport clears it again within a
+	// tick if the stream has already died.
+	m_liveObserverStreamOpen = TRUE;
+	m_liveObserverStarvedSinceMs = 0;
+
+	// Drain the snapshot fast; updatePlayback drops back to the saved limit on the
+	// first EOF. Never save a 0: FrameRateLimit::wait would spin forever restoring it.
+	if (TheFramePacer)
+	{
+		m_liveObserverSavedFpsLimit = TheFramePacer->getFramesPerSecondLimit();
+		if (m_liveObserverSavedFpsLimit <= 0)
+			m_liveObserverSavedFpsLimit = LOGICFRAMES_PER_SECOND;
+		TheFramePacer->setFramesPerSecondLimit(1000);
+		TheWritableGlobalData->m_useFpsLimit = TRUE;
+		m_liveObserverFpsBoosted = TRUE;
+	}
+	OBS_LOG("LiveObserver: playing %s live, file pos %d, waiting=%d", filename.str(), m_file ? m_file->position() : -1, m_liveObserverWaitingForBytes ? 1 : 0);
+	return TRUE;
+}
+
 Bool RecorderClass::isPlaybackInProgress() const
 {
 	return isPlaybackMode() && m_nextFrame != -1;
@@ -1303,8 +1445,19 @@ AsciiString RecorderClass::readAsciiString() {
  * is stopped and the next frame is said to be -1.
  */
 void RecorderClass::readNextFrame() {
+	const Int posBefore = m_file->position();
 	Int bytesRead = m_file->read(&m_nextFrame, sizeof(m_nextFrame));
 	if (bytesRead != sizeof(m_nextFrame)) {
+		// Live observing: the file is still being appended to, so end of file means
+		// "wait for more bytes". m_liveObserverArming covers the open-time read inside
+		// playbackFile, which runs before the mode has flipped: a snapshot of a match
+		// that just started legitimately holds no commands yet.
+		if (m_liveObserverArming || (isLiveObserverMode() && m_liveObserverStreamOpen))
+		{
+			m_liveObserverRetryPos        = posBefore;
+			m_liveObserverWaitingForBytes = TRUE;
+			return;
+		}
 		DEBUG_LOG(("RecorderClass::readNextFrame - read failed on frame %d", TheGameLogic->getFrame()));
 		m_nextFrame = -1;
 		stopPlayback();
@@ -1312,13 +1465,47 @@ void RecorderClass::readNextFrame() {
 }
 
 /**
+ * Read exactly size bytes, flagging a short read rather than silently continuing.
+ */
+Bool RecorderClass::readReplayBytes(void *dst, Int size) {
+	const Int bytesRead = m_file->read(dst, size);
+	if (bytesRead != size) {
+		m_replayShortRead = TRUE;
+		return FALSE;
+	}
+	return TRUE;
+}
+
+/**
+ * A record could not be read in full. For a live observer the stream simply has not
+ * delivered the rest of it yet: rewind to the start of the record so the retry in
+ * updatePlayback re-reads it whole once the bytes have landed. A file that is not being
+ * appended to is genuinely truncated; readNextFrame hits the same EOF next and ends
+ * playback, so the partial command is just not appended.
+ */
+void RecorderClass::rollbackTornRecord(Int posBefore) {
+	if (isLiveObserverMode() && m_liveObserverStreamOpen) {
+		m_liveObserverRetryPos        = posBefore;
+		m_liveObserverWaitingForBytes = TRUE;
+	}
+}
+
+/**
  * This reads the next command from the replay file and appends it to TheCommandList.
  */
 void RecorderClass::appendNextCommand() {
+	// TheSuperHackers @feature bill-rich 15/09/2026 A replay record is [type][playerIndex][numTypes][argType,
+	// argCount]*[args]* with no length prefix, so it can only be validated by reading it
+	// whole. For a live observer the file is appended in arbitrary chunks and routinely
+	// ends mid-record; every read is checked and a torn record is rolled back so it can
+	// be re-read whole later. Previously only the first read was checked and a torn
+	// record left the offset stranded mid-record, feeding argument bytes back in as
+	// frame numbers and message types.
+	const Int posBefore = m_file->position();
+	m_replayShortRead = FALSE;
 	GameMessage::Type type;
-	Int bytesRead = m_file->read(&type, sizeof(type));
-	if (bytesRead != sizeof(type)) {
-		DEBUG_LOG(("RecorderClass::appendNextCommand - read failed on frame %d", m_nextFrame/*TheGameLogic->getFrame()*/));
+	if (!readReplayBytes(&type, sizeof(type))) {
+		rollbackTornRecord(posBefore);
 		return;
 	}
 
@@ -1337,7 +1524,11 @@ void RecorderClass::appendNextCommand() {
 #endif // DEBUG_LOGGING
 
 	Int playerIndex = -1;
-	m_file->read(&playerIndex, sizeof(playerIndex));
+	if (!readReplayBytes(&playerIndex, sizeof(playerIndex))) {
+		deleteInstance(msg);
+		rollbackTornRecord(posBefore);
+		return;
+	}
 	msg->friend_setPlayerIndex(playerIndex);
 
 	// don't debug log this if we're debugging sync errors, as it will cause diff problems between a game and it's replay...
@@ -1356,14 +1547,22 @@ void RecorderClass::appendNextCommand() {
 
 	UnsignedByte numTypes = 0;
 	Int totalArgs = 0;
-	m_file->read(&numTypes, sizeof(numTypes));
+	if (!readReplayBytes(&numTypes, sizeof(numTypes))) {
+		deleteInstance(msg);
+		rollbackTornRecord(posBefore);
+		return;
+	}
 
 	GameMessageParser* parser = newInstance(GameMessageParser)();
 	for (UnsignedByte i = 0; i < numTypes; ++i) {
 		UnsignedByte type = (UnsignedByte)ARGUMENTDATATYPE_UNKNOWN;
-		m_file->read(&type, sizeof(type));
 		UnsignedByte numArgs = 0;
-		m_file->read(&numArgs, sizeof(numArgs));
+		if (!readReplayBytes(&type, sizeof(type)) || !readReplayBytes(&numArgs, sizeof(numArgs))) {
+			deleteInstance(parser);
+			deleteInstance(msg);
+			rollbackTornRecord(posBefore);
+			return;
+		}
 		parser->addArgType((GameMessageArgumentDataType)type, numArgs);
 		totalArgs += numArgs;
 	}
@@ -1377,6 +1576,12 @@ void RecorderClass::appendNextCommand() {
 	}
 	for (Int j = 0; j < totalArgs; ++j) {
 		readArgument(lasttype, msg);
+		if (m_replayShortRead) {
+			deleteInstance(parser);
+			deleteInstance(msg);
+			rollbackTornRecord(posBefore);
+			return;
+		}
 
 		--argsLeftForType;
 		if (argsLeftForType == 0) {
@@ -1412,7 +1617,7 @@ void RecorderClass::readArgument(GameMessageArgumentDataType type, GameMessage *
 	switch (type) {
 		case ARGUMENTDATATYPE_INTEGER: {
 			Int theint;
-			m_file->read(&theint, sizeof(theint));
+			readReplayBytes(&theint, sizeof(theint));
 			msg->appendIntegerArgument(theint);
 #ifdef DEBUG_LOGGING
 			if (m_doingAnalysis)
@@ -1424,7 +1629,7 @@ void RecorderClass::readArgument(GameMessageArgumentDataType type, GameMessage *
 		}
 		case ARGUMENTDATATYPE_REAL: {
 			Real thereal;
-			m_file->read(&thereal, sizeof(thereal));
+			readReplayBytes(&thereal, sizeof(thereal));
 			msg->appendRealArgument(thereal);
 #ifdef DEBUG_LOGGING
 			if (m_doingAnalysis)
@@ -1436,7 +1641,7 @@ void RecorderClass::readArgument(GameMessageArgumentDataType type, GameMessage *
 		}
 		case ARGUMENTDATATYPE_BOOLEAN: {
 			Bool thebool;
-			m_file->read(&thebool, sizeof(thebool));
+			readReplayBytes(&thebool, sizeof(thebool));
 			msg->appendBooleanArgument(thebool);
 #ifdef DEBUG_LOGGING
 			if (m_doingAnalysis)
@@ -1448,7 +1653,7 @@ void RecorderClass::readArgument(GameMessageArgumentDataType type, GameMessage *
 		}
 		case ARGUMENTDATATYPE_OBJECTID: {
 			ObjectID theid;
-			m_file->read(&theid, sizeof(theid));
+			readReplayBytes(&theid, sizeof(theid));
 			msg->appendObjectIDArgument(theid);
 #ifdef DEBUG_LOGGING
 			if (m_doingAnalysis)
@@ -1460,7 +1665,7 @@ void RecorderClass::readArgument(GameMessageArgumentDataType type, GameMessage *
 		}
 		case ARGUMENTDATATYPE_DRAWABLEID: {
 			DrawableID theid;
-			m_file->read(&theid, sizeof(theid));
+			readReplayBytes(&theid, sizeof(theid));
 			msg->appendDrawableIDArgument(theid);
 #ifdef DEBUG_LOGGING
 			if (m_doingAnalysis)
@@ -1472,7 +1677,7 @@ void RecorderClass::readArgument(GameMessageArgumentDataType type, GameMessage *
 		}
 		case ARGUMENTDATATYPE_TEAMID: {
 			UnsignedInt theid;
-			m_file->read(&theid, sizeof(theid));
+			readReplayBytes(&theid, sizeof(theid));
 			msg->appendTeamIDArgument(theid);
 #ifdef DEBUG_LOGGING
 			if (m_doingAnalysis)
@@ -1484,7 +1689,7 @@ void RecorderClass::readArgument(GameMessageArgumentDataType type, GameMessage *
 		}
 		case ARGUMENTDATATYPE_LOCATION: {
 			Coord3D loc;
-			m_file->read(&loc, sizeof(loc));
+			readReplayBytes(&loc, sizeof(loc));
 			msg->appendLocationArgument(loc);
 #ifdef DEBUG_LOGGING
 			if (m_doingAnalysis)
@@ -1497,7 +1702,7 @@ void RecorderClass::readArgument(GameMessageArgumentDataType type, GameMessage *
 		}
 		case ARGUMENTDATATYPE_PIXEL: {
 			ICoord2D pixel;
-			m_file->read(&pixel, sizeof(pixel));
+			readReplayBytes(&pixel, sizeof(pixel));
 			msg->appendPixelArgument(pixel);
 #ifdef DEBUG_LOGGING
 			if (m_doingAnalysis)
@@ -1509,7 +1714,7 @@ void RecorderClass::readArgument(GameMessageArgumentDataType type, GameMessage *
 		}
 		case ARGUMENTDATATYPE_PIXELREGION: {
 			IRegion2D reg;
-			m_file->read(&reg, sizeof(reg));
+			readReplayBytes(&reg, sizeof(reg));
 			msg->appendPixelRegionArgument(reg);
 #ifdef DEBUG_LOGGING
 			if (m_doingAnalysis)
@@ -1521,7 +1726,7 @@ void RecorderClass::readArgument(GameMessageArgumentDataType type, GameMessage *
 		}
 		case ARGUMENTDATATYPE_TIMESTAMP: {  // Not to be confused with Terrance Stamp... Kneel before Zod!!!
 			UnsignedInt stamp;
-			m_file->read(&stamp, sizeof(stamp));
+			readReplayBytes(&stamp, sizeof(stamp));
 			msg->appendTimestampArgument(stamp);
 #ifdef DEBUG_LOGGING
 			if (m_doingAnalysis)
@@ -1533,7 +1738,7 @@ void RecorderClass::readArgument(GameMessageArgumentDataType type, GameMessage *
 		}
 		case ARGUMENTDATATYPE_WIDECHAR: {
 			WideChar theid;
-			m_file->read(&theid, sizeof(theid));
+			readReplayBytes(&theid, sizeof(theid));
 			msg->appendWideCharArgument(theid);
 #ifdef DEBUG_LOGGING
 			if (m_doingAnalysis)
