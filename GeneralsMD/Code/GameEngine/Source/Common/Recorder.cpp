@@ -407,6 +407,7 @@ void RecorderClass::init() {
 	m_liveObserverTruncated       = FALSE;
 	m_liveObserverLastReopenMs    = 0;
 	m_liveObserverEdgeMarginBytes = 2048;
+	m_liveObserverPlayedAny       = FALSE;
 
 	OptionPreferences optionPref;
 	m_archiveReplays = optionPref.getArchiveReplaysEnabled();
@@ -544,6 +545,7 @@ void RecorderClass::updatePlayback() {
 	while (m_nextFrame == curFrame) {
 		appendNextCommand();	// append the next command to TheCommandQueue
 		readNextFrame();	// Read the next command's frame number for playback.
+		m_liveObserverPlayedAny = TRUE;
 		// live observing: the file ran out mid-frame, let the retry path run next tick
 		if (isLiveObserverMode() && m_liveObserverWaitingForBytes)
 			break;
@@ -552,7 +554,9 @@ void RecorderClass::updatePlayback() {
 	// Live observing: drain the backlog fast, but stop a little short of the live edge
 	// and play the rest at normal speed, so the viewer keeps a small buffer instead of
 	// stalling on every chunk boundary; boost again if the backlog builds back up.
-	if (isLiveObserverMode() && TheFramePacer)
+	// Not before the first record has been consumed: until then the frame counter still
+	// belongs to the shell map and the transport has no rate estimate yet.
+	if (isLiveObserverMode() && TheFramePacer && m_liveObserverPlayedAny)
 	{
 		// The margin is a few seconds of match at the stream's observed byte rate (the
 		// transport keeps it updated); a fixed byte count would be minutes on an idle map.

@@ -236,6 +236,7 @@ protected:
 	Bool        m_liveObserverTruncated;		///< a torn record with the stream closed: the file ends here
 	UnsignedInt m_liveObserverLastReopenMs;
 	Int         m_liveObserverEdgeMarginBytes;
+	Bool        m_liveObserverPlayedAny;		///< at least one record of the live file has been consumed
 	UnsignedInt m_liveObserverStarvedSinceMs;	///< wall clock when the byte starvation began, 0 while fed
 };
 

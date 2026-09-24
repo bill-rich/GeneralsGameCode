@@ -341,7 +341,7 @@ Bool handleLobbySlashCommands(UnicodeString uText, Bool *wasRateLimited)
 		}
 		if (pLivestreams->StartWatching(streams[choice - 1]))
 		{
-			GadgetListBoxAddEntryText(listboxLobbyChat, UnicodeString(L"Joining the stream. Playback starts once the first minute of the match has arrived."), GameSpyColor[GSCOLOR_CHAT_NORMAL], -1, -1);
+			GadgetListBoxAddEntryText(listboxLobbyChat, UnicodeString(L"Joining the stream. Playback starts as soon as the broadcast delay has passed."), GameSpyColor[GSCOLOR_CHAT_NORMAL], -1, -1);
 		}
 		else
 		{
@@ -2574,7 +2574,7 @@ WindowMsgHandledType WOLLobbyMenuSystem( GameWindow *window, UnsignedInt msg,
 					}
 					else if (pLivestreams->StartWatching(pLivestreams->GetLastStreamList()[row]))
 					{
-						GadgetListBoxAddEntryText(listboxLobbyChat, TheGameText->FETCH_OR_SUBSTITUTE("GUI:LiveGamesJoining", L"Joining the stream. Playback starts once the first minute of the match has arrived."), GameSpyColor[GSCOLOR_CHAT_NORMAL], -1, -1);
+						GadgetListBoxAddEntryText(listboxLobbyChat, TheGameText->FETCH_OR_SUBSTITUTE("GUI:LiveGamesJoining", L"Joining the stream. Playback starts as soon as the broadcast delay has passed."), GameSpyColor[GSCOLOR_CHAT_NORMAL], -1, -1);
 					}
 					else
 					{
