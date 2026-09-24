@@ -9,5 +9,6 @@
 #include "GameNetwork/GeneralsOnline/OnlineServices_StatsInterface.h"
 #include "GameNetwork/GeneralsOnline/OnlineServices_MatchmakingInterface.h"
 #include "GameNetwork/GeneralsOnline/OnlineServices_SocialInterface.h"
+#include "GameNetwork/GeneralsOnline/OnlineServices_LivestreamInterface.h"
 
 #include "GameNetwork/GeneralsOnline/PluginInterfaces.h"

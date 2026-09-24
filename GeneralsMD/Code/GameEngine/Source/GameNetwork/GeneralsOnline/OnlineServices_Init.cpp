@@ -861,6 +861,7 @@ void NGMP_OnlineServicesManager::Init()
 	m_pStatsInterface = new NGMP_OnlineServices_StatsInterface();
 	m_pMatchmakingInterface = new NGMP_OnlineServices_MatchmakingInterface();
 	m_pSocialInterface = new NGMP_OnlineServices_SocialInterface();
+	m_pLivestreamInterface = new NGMP_OnlineServices_LivestreamInterface();
 
 	m_pHTTPManager = new HTTPManager();
 	m_pHTTPManager->Initialize();
@@ -909,6 +910,11 @@ void NGMP_OnlineServicesManager::Init()
 void NGMP_OnlineServicesManager::Tick()
 {
 	AnticheatPlugInterface::Tick();
+
+	if (m_pLivestreamInterface != nullptr)
+	{
+		m_pLivestreamInterface->Tick();
+	}
 
 	// screenshots
 	{

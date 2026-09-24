@@ -1154,6 +1154,7 @@ set(GAMEENGINE_SRC
     Include/GameNetwork/GeneralsOnline/OnlineServices_RoomsInterface.h
     Include/GameNetwork/GeneralsOnline/OnlineServices_StatsInterface.h
     Include/GameNetwork/GeneralsOnline/OnlineServices_SocialInterface.h
+    Include/GameNetwork/GeneralsOnline/OnlineServices_LivestreamInterface.h
     Include/GameNetwork/GeneralsOnline/OnlineServices_MatchmakingInterface.h
     Include/GameNetwork/GeneralsOnline/GeneralsOnline_Settings.h
     Include/GameNetwork/GeneralsOnline/HTTP/HTTPManager.h
@@ -1197,6 +1198,7 @@ set(GAMEENGINE_SRC
     Source/GameNetwork/GeneralsOnline/OnlineServices_RoomsInterface.cpp
     Source/GameNetwork/GeneralsOnline/OnlineServices_StatsInterface.cpp
     Source/GameNetwork/GeneralsOnline/OnlineServices_SocialInterface.cpp
+    Source/GameNetwork/GeneralsOnline/OnlineServices_LivestreamInterface.cpp
     Source/GameNetwork/GeneralsOnline/OnlineServices_MatchmakingInterface.cpp
     Source/GameNetwork/GeneralsOnline/NextGenTransport.cpp
     Source/GameNetwork/GeneralsOnline/NetworkBitstream.cpp

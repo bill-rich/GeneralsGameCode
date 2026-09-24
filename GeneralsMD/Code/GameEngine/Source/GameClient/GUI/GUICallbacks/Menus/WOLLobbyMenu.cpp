@@ -273,6 +273,71 @@ Bool handleLobbySlashCommands(UnicodeString uText, Bool *wasRateLimited)
 		refreshPlayerList(TRUE);
 		return TRUE; // was a slash command
 	}
+	else if (token == "watch")
+	{
+		// TheSuperHackers @feature bill-rich 24/09/2026 /watch lists the matches being streamed for live
+		// spectating; /watch <number> pulls that stream and plays it as it grows, behind the
+		// service's broadcast delay. Matches in progress are not in the lobby list, so this
+		// is the observer's entry point until the browser grows a Watch button.
+		NGMP_OnlineServices_LivestreamInterface* pLivestreams = NGMP_OnlineServicesManager::GetInterface<NGMP_OnlineServices_LivestreamInterface>();
+		if (pLivestreams == nullptr)
+		{
+			return TRUE;
+		}
+		AsciiString arg;
+		remainder.nextToken(&arg);
+		if (arg.isEmpty())
+		{
+			GadgetListBoxAddEntryText(listboxLobbyChat, UnicodeString(L"Looking for matches in progress..."), GameSpyColor[GSCOLOR_CHAT_NORMAL], -1, -1);
+			pLivestreams->ListStreams([](bool bSuccess, std::vector<LivestreamEntry> streams)
+				{
+					if (listboxLobbyChat == nullptr)
+					{
+						return;
+					}
+					if (!bSuccess)
+					{
+						GadgetListBoxAddEntryText(listboxLobbyChat, UnicodeString(L"Could not fetch the list of matches in progress."), GameMakeColor(255, 0, 0, 255), -1, -1);
+						return;
+					}
+					if (streams.empty())
+					{
+						GadgetListBoxAddEntryText(listboxLobbyChat, UnicodeString(L"No matches are being streamed right now."), GameSpyColor[GSCOLOR_CHAT_NORMAL], -1, -1);
+						return;
+					}
+					Int index = 1;
+					for (const LivestreamEntry& stream : streams)
+					{
+						UnicodeString line;
+						UnicodeString name, map;
+						name.translate(AsciiString(stream.name.c_str()));
+						map.translate(AsciiString(stream.map_name.c_str()));
+						line.format(L"%d) %s - %s - %d players - %d:%02d in", index, name.str(), map.str(), stream.players, stream.seconds_live / 60, stream.seconds_live % 60);
+						GadgetListBoxAddEntryText(listboxLobbyChat, line, GameSpyColor[GSCOLOR_CHAT_NORMAL], -1, -1);
+						++index;
+					}
+					GadgetListBoxAddEntryText(listboxLobbyChat, UnicodeString(L"Type /watch <number> to spectate one."), GameSpyColor[GSCOLOR_CHAT_NORMAL], -1, -1);
+				});
+			return TRUE; // was a slash command
+		}
+
+		const Int choice = atoi(arg.str());
+		const std::vector<LivestreamEntry>& streams = pLivestreams->GetLastStreamList();
+		if (choice < 1 || choice > (Int)streams.size())
+		{
+			GadgetListBoxAddEntryText(listboxLobbyChat, UnicodeString(L"No such match. Type /watch to list the matches in progress first."), GameMakeColor(255, 0, 0, 255), -1, -1);
+			return TRUE; // was a slash command
+		}
+		if (pLivestreams->StartWatching(streams[choice - 1].lobby_id))
+		{
+			GadgetListBoxAddEntryText(listboxLobbyChat, UnicodeString(L"Joining the stream. Playback starts once the first minute of the match has arrived."), GameSpyColor[GSCOLOR_CHAT_NORMAL], -1, -1);
+		}
+		else
+		{
+			GadgetListBoxAddEntryText(listboxLobbyChat, UnicodeString(L"Could not start watching that match."), GameMakeColor(255, 0, 0, 255), -1, -1);
+		}
+		return TRUE; // was a slash command
+	}
 	/*
 	if (token == "togglegamelist")
 	{

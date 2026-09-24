@@ -13,6 +13,7 @@ class NGMP_OnlineServices_RoomsInterface;
 class NGMP_OnlineServices_StatsInterface;
 class NGMP_OnlineServices_MatchmakingInterface;
 class NGMP_OnlineServices_SocialInterface;
+#include "GameNetwork/GeneralsOnline/OnlineServices_LivestreamInterface.h" // complete type: the manager deletes it inline
 
 class NetworkMesh;
 
@@ -429,6 +430,10 @@ public:
 			{
 				return m_pOnlineServicesManager->m_pSocialInterface;
 			}
+			else if constexpr (std::is_same<T, NGMP_OnlineServices_LivestreamInterface>::value)
+			{
+				return m_pOnlineServicesManager->m_pLivestreamInterface;
+			}
 		}
 
 		return nullptr;
@@ -474,6 +479,12 @@ public:
 		{
 			delete m_pSocialInterface;
 			m_pSocialInterface = nullptr;
+		}
+
+		if (m_pLivestreamInterface != nullptr)
+		{
+			delete m_pLivestreamInterface;
+			m_pLivestreamInterface = nullptr;
 		}
 
 		if (m_pHTTPManager != nullptr)
@@ -547,6 +558,7 @@ public:
 	NGMP_OnlineServices_StatsInterface* m_pStatsInterface = nullptr;
 	NGMP_OnlineServices_MatchmakingInterface* m_pMatchmakingInterface = nullptr;
 	NGMP_OnlineServices_SocialInterface* m_pSocialInterface = nullptr;
+	NGMP_OnlineServices_LivestreamInterface* m_pLivestreamInterface = nullptr;
 
 	ServiceConfig& GetServiceConfig() { return m_ServiceConfig; }
 
