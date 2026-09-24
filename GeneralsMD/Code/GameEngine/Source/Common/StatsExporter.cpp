@@ -33,6 +33,9 @@
 #include "GameLogic/Module/BattlePlanUpdate.h"
 
 #include <stdio.h>
+// TheSuperHackers @bugfix bill-rich 24/09/2026 vcpkg zlib 1.3.1's zconf.h redefines the engine's Byte
+// typedef; the same guard CompressionManager.cpp uses keeps it out.
+#define __MACTYPES__
 #include <zlib.h>
 
 #include "GameNetwork/GeneralsOnline/json.hpp"
