@@ -28,6 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include <unordered_map>
+#include <string>
 
 #define DEFINE_SHADOW_NAMES
 
@@ -1153,7 +1155,6 @@ InGameUI::InGameUI()
 		m_playerHunted[ i ] = FALSE;
 		m_playerHuntedSinceFrame[ i ] = 0;
 	}
-	m_nextHuntedEvalFrame = 0;
 
 	// message info
 	for (i = 0; i < MAX_UI_MESSAGES; i++)
@@ -2231,7 +2232,6 @@ void InGameUI::reset()
 		m_playerHunted[hp] = FALSE;
 		m_playerHuntedSinceFrame[hp] = 0;
 	}
-	m_nextHuntedEvalFrame = 0;
 	// reset the command bar
 	TheControlBar->reset();
 
@@ -6534,6 +6534,36 @@ struct HuntedCheckData
 	Bool hasBuilder;
 };
 
+// Whether a structure's command set can queue a dozer-kind unit. Resolving a command
+// set is a name walk over every set, so the answer is cached per command set name.
+static Bool templateCanBuildDozer(const Object *obj)
+{
+	static std::unordered_map<std::string, Bool> s_cache;
+	const AsciiString& setName = obj->getCommandSetString();
+	if (setName.isEmpty())
+		return FALSE;
+	std::unordered_map<std::string, Bool>::const_iterator found = s_cache.find(setName.str());
+	if (found != s_cache.end())
+		return found->second;
+
+	Bool canBuild = FALSE;
+	const CommandSet *commandSet = TheControlBar ? TheControlBar->findCommandSet(setName) : nullptr;
+	if (commandSet != nullptr)
+	{
+		for (Int j = 0; j < MAX_COMMANDS_PER_SET && !canBuild; ++j)
+		{
+			const CommandButton *button = commandSet->getCommandButton(j);
+			if (button == nullptr || button->getCommandType() != GUI_COMMAND_UNIT_BUILD)
+				continue;
+			const ThingTemplate *thing = button->getThingTemplate();
+			if (thing != nullptr && thing->isKindOf(KINDOF_DOZER))
+				canBuild = TRUE;
+		}
+	}
+	s_cache[setName.str()] = canBuild;
+	return canBuild;
+}
+
 static void huntedCheckObjectFn(Object *obj, void *userData)
 {
 	HuntedCheckData *data = (HuntedCheckData *)userData;
@@ -6548,31 +6578,24 @@ static void huntedCheckObjectFn(Object *obj, void *userData)
 		return;
 	}
 
+	// A GLA hole regrows its structure with a worker of its own, so the player is
+	// not out of builders while one stands.
+	if (obj->isKindOf(KINDOF_REBUILD_HOLE))
+	{
+		data->hasBuilder = TRUE;
+		return;
+	}
+
 	// A structure only counts if it is finished, not being sold, and can
-	// queue a dozer-kind unit from its command set.
+	// queue a dozer-kind unit from its command set. Units never can.
+	if (!obj->isKindOf(KINDOF_STRUCTURE))
+		return;
 	if (obj->getStatusBits().test(OBJECT_STATUS_UNDER_CONSTRUCTION))
 		return;
 	if (obj->getStatusBits().test(OBJECT_STATUS_SOLD))
 		return;
-	if (TheControlBar == nullptr)
-		return;
-	const CommandSet *commandSet = TheControlBar->findCommandSet(obj->getCommandSetString());
-	if (commandSet == nullptr)
-		return;
-	for (Int j = 0; j < MAX_COMMANDS_PER_SET; ++j)
-	{
-		const CommandButton *button = commandSet->getCommandButton(j);
-		if (button == nullptr)
-			continue;
-		if (button->getCommandType() != GUI_COMMAND_UNIT_BUILD)
-			continue;
-		const ThingTemplate *thing = button->getThingTemplate();
-		if (thing != nullptr && thing->isKindOf(KINDOF_DOZER))
-		{
-			data->hasBuilder = TRUE;
-			return;
-		}
-	}
+	if (templateCanBuildDozer(obj))
+		data->hasBuilder = TRUE;
 }
 
 static Bool computePlayerIsHunted(const Player *player)
@@ -6593,20 +6616,21 @@ static Bool computePlayerIsHunted(const Player *player)
 //-------------------------------------------------------------------------------------------------
 void InGameUI::updateHuntedPlayers()
 {
-	if (!isViewerOnlyClient())
+	if (!rts::isViewerOnlyClient())
 		return;
 	if (ThePlayerList == nullptr || TheGameLogic == nullptr)
 		return;
 
 	const UnsignedInt now = TheGameLogic->getFrame();
-	if (now < m_nextHuntedEvalFrame)
-		return;
-	// The check walks every object a player owns, so sample once a logic second.
-	m_nextHuntedEvalFrame = now + LOGICFRAMES_PER_SECOND;
 
 	AsciiString name;
 	for (Int slotIndex = 0; slotIndex < MAX_SLOTS; ++slotIndex)
 	{
+		// The check walks every object a player owns, so each player is sampled once a
+		// logic second, and the players are staggered across frames rather than all
+		// landing on the same one.
+		if ((now + slotIndex) % LOGICFRAMES_PER_SECOND != 0)
+			continue;
 		name.format("player%d", slotIndex);
 		Player *player = ThePlayerList->findPlayerWithNameKey(TheNameKeyGenerator->nameToKey(name));
 		if (player == nullptr || player->isPlayerObserver())
@@ -6648,15 +6672,19 @@ void InGameUI::updateHuntedPlayers()
 /** " HUNTED m:ss" for a hunted player, empty otherwise. How long they have held out matters as
 	* much as the fact: most are dead within a minute, so the ones that are not are the story. */
 //-------------------------------------------------------------------------------------------------
+UnicodeString InGameUI::formatHuntedSuffixForSeconds(Int heldSeconds)
+{
+	return TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:ObserverHuntedSuffix",
+		L" HUNTED %d:%02d", heldSeconds / 60, heldSeconds % 60);
+}
+
 UnicodeString InGameUI::formatHuntedSuffix(Int playerIndex) const
 {
 	UnicodeString suffix;
 	if (playerIndex < 0 || playerIndex >= MAX_PLAYER_COUNT || !m_playerHunted[playerIndex] || TheGameLogic == nullptr)
 		return suffix;
 	const UnsignedInt heldFrames = TheGameLogic->getFrame() - m_playerHuntedSinceFrame[playerIndex];
-	const Int heldSeconds = (Int)(heldFrames / LOGICFRAMES_PER_SECOND);
-	suffix = TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:ObserverHuntedSuffix",
-		L" HUNTED %d:%02d", heldSeconds / 60, heldSeconds % 60);
+	suffix = formatHuntedSuffixForSeconds((Int)(heldFrames / LOGICFRAMES_PER_SECOND));
 	return suffix;
 }
 
@@ -6858,8 +6886,7 @@ void InGameUI::drawObserverStats(Int & x, Int & y)
                         cells[2] = formatNum(pd.money);
                         // hunted players carry a running clock on the money cell
                         if (pd.hunted)
-                            cells[2].concat(TheGameText->FETCH_OR_SUBSTITUTE_FORMAT("GUI:ObserverHuntedSuffix",
-                                L" HUNTED %d:%02d", pd.huntedSeconds / 60, pd.huntedSeconds % 60));
+                            cells[2].concat(formatHuntedSuffixForSeconds(pd.huntedSeconds));
                         cells[3].format(L"+%ls", formatNum(pd.cpm).str());
                         cells[4].format(L"(%d) %d", pd.rank, pd.xp);
                         cells[5].format(L"%d", pd.sp);
@@ -7500,7 +7527,7 @@ void InGameUI::drawPlayerInfoList()
 					// ticks while the money may not, so bypass the unchanged-value cache
 					playerInfoListValue.format(L"%u%ls", currentValues[column], huntedSuffix.str());
 					m_playerInfoList.values[column][row]->setText(playerInfoListValue);
-					lastValue = (UnsignedInt)-1;
+					lastValue = (UnsignedInt)-1; // sentinel no money value matches, so the cell is rewritten next frame
 					continue;
 				}
 				else

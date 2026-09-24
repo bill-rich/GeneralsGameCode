@@ -614,6 +614,7 @@ private:
 	void drawPlayerInfoList();
 	void updateHuntedPlayers();				///< refresh the cached per-player hunted state and announce transitions
 	UnicodeString formatHuntedSuffix(Int playerIndex) const; ///< " HUNTED m:ss" or empty
+	static UnicodeString formatHuntedSuffixForSeconds(Int heldSeconds); ///< " HUNTED m:ss" for a given hold time
 	void drawObserverStats(Int &x, Int &y);
 	Bool m_observerStatsHidden = false;   // hide/show observer overlay
 
@@ -941,7 +942,6 @@ protected:
 	//
 	Bool													m_playerHunted[MAX_PLAYER_COUNT];
 	UnsignedInt										m_playerHuntedSinceFrame[MAX_PLAYER_COUNT];
-	UnsignedInt										m_nextHuntedEvalFrame;
 
 	PlayerInfoList								m_playerInfoList;
 	AsciiString										m_playerInfoListFont;
