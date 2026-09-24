@@ -32,7 +32,8 @@ struct LivestreamEntry
 	int64_t lobby_id = -1;
 	std::string name;
 	std::string map_name;
-	std::string map_path;
+	std::string map_path;   // as the lobby stores it: relative to Maps\ (official) or the user map dir
+	bool map_official = false;
 	int players = 0;
 	int64_t total_bytes = 0;
 	int seconds_live = 0;

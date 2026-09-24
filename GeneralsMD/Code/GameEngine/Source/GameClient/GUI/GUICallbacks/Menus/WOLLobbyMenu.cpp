@@ -1359,7 +1359,10 @@ void WOLLobbyMenuInit( WindowLayout *layout, void *userData )
 	buttonLiveGames = TheWindowManager->winGetWindowFromId(parent, buttonLiveGamesID); // absent from older layouts; /watch still works
 	s_liveGamesMode = FALSE;
 	if (buttonLiveGames)
+	{
 		buttonLiveGames->winSetText(TheGameText->FETCH_OR_SUBSTITUTE("GUI:LiveGames", L"Live"));
+		buttonLiveGames->winSetTooltip(TheGameText->FETCH_OR_SUBSTITUTE("TOOLTIP:LiveGames", L"Show the matches in progress that can be watched"));
+	}
 	if (buttonJoin)
 		s_joinButtonText = buttonJoin->winGetText();
 	buttonJoin->winEnable(FALSE);

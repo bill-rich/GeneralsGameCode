@@ -243,6 +243,7 @@ void NGMP_OnlineServices_LivestreamInterface::ListStreams(std::function<void(boo
 							entry.name = jStream.value("name", std::string());
 							entry.map_name = jStream.value("map_name", std::string());
 							entry.map_path = jStream.value("map_path", std::string());
+							entry.map_official = jStream.value("map_official", false);
 							entry.players = jStream.value("players", 0);
 							entry.total_bytes = jStream.value("total_bytes", (int64_t)0);
 							entry.seconds_live = jStream.value("seconds_live", 0);
@@ -280,7 +281,13 @@ bool NGMP_OnlineServices_LivestreamInterface::HasMapFor(const LivestreamEntry& s
 	{
 		return false;
 	}
-	AsciiString mapPath = stream.map_path.c_str();
+	// The service stores the path relative to the map root; the map cache keys official
+	// maps under maps\ and user maps under the user map dir (same fix-up as the lobby list).
+	AsciiString mapPath;
+	if (stream.map_official)
+		mapPath.format("maps\\%s", stream.map_path.c_str());
+	else
+		mapPath.format("%s\\%s", TheMapCache->getUserMapDir(true).str(), stream.map_path.c_str());
 	mapPath.toLower();
 	return TheMapCache->findMap(mapPath) != nullptr;
 }
