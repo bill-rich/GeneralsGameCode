@@ -40,7 +40,8 @@ namespace
 	const int STREAM_MAX_FAILURES = 30;          // consecutive failed sends before the streamer gives up (~30 s)
 	const int WATCH_POLL_INTERVAL_MS = 1000;
 	const int WATCH_MAX_FAILURES = 60;           // consecutive failed polls before the observer gives up
-	const int64_t WATCH_MIN_BYTES_TO_START = 4096; // enough for the replay header plus the first frames
+	const int64_t WATCH_START_GRACE_MS = 2000;   // the header lands in the first chunk; a moment more covers its tail
+	const int WATCH_EDGE_MARGIN_SECONDS = 4;     // how far short of the delayed edge playback settles, in seconds of stream
 	const char* WATCH_FILE_NAME = "LiveObserver";
 
 	int64_t NowMS()
@@ -324,6 +325,8 @@ bool NGMP_OnlineServices_LivestreamInterface::StartWatching(const LivestreamEntr
 	m_watchEnded = false;
 	m_watchLastPollMS = 0;
 	m_watchFailures = 0;
+	m_watchFirstBytesMS = 0;
+	m_watchFirstBytesFrom = 0;
 	++m_watchGeneration;
 	NetworkLog(ELogVerbosity::LOG_RELEASE, "Livestream: watching lobby %lld into %s", (long long)lobbyID, GetObserverFilePath().str());
 	return true;
@@ -453,9 +456,21 @@ void NGMP_OnlineServices_LivestreamInterface::PollObserver()
 					StopWatching();
 					return;
 				}
+				if (m_watchFirstBytesMS == 0)
+				{
+					m_watchFirstBytesMS = NowMS();
+					m_watchFirstBytesFrom = m_watchFrom;
+				}
 				if (m_watchPlaybackStarted && TheRecorder != nullptr)
 				{
 					TheRecorder->noteLiveObserverBytes((Int)m_watchFrom);
+					// Margin = a few seconds at the stream's average byte rate so far.
+					const int64_t elapsedMS = NowMS() - m_watchFirstBytesMS;
+					if (elapsedMS >= 5000)
+					{
+						const int64_t bytesPerSecond = (m_watchFrom - m_watchFirstBytesFrom) * 1000 / elapsedMS;
+						TheRecorder->setLiveObserverEdgeMargin((Int)(bytesPerSecond * WATCH_EDGE_MARGIN_SECONDS));
+					}
 				}
 			}
 
@@ -475,7 +490,8 @@ void NGMP_OnlineServices_LivestreamInterface::PollObserver()
 				}
 			}
 
-			if (!m_watchPlaybackStarted && (m_watchFrom >= WATCH_MIN_BYTES_TO_START || m_watchEnded) && m_watchFrom > 0)
+			const bool bReadyToStart = m_watchFrom > 0 && (m_watchEnded || NowMS() - m_watchFirstBytesMS >= WATCH_START_GRACE_MS);
+			if (!m_watchPlaybackStarted && bReadyToStart)
 			{
 				if (TheShell == nullptr || !TheShell->isShellActive() || TheShell->top() == nullptr || TheGameLogic == nullptr || TheGameLogic->isLoadingMap())
 				{

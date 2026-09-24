@@ -406,6 +406,7 @@ void RecorderClass::init() {
 	m_liveObserverBytesArrived    = FALSE;
 	m_liveObserverTruncated       = FALSE;
 	m_liveObserverLastReopenMs    = 0;
+	m_liveObserverEdgeMarginBytes = 2048;
 
 	OptionPreferences optionPref;
 	m_archiveReplays = optionPref.getArchiveReplaysEnabled();
@@ -553,15 +554,17 @@ void RecorderClass::updatePlayback() {
 	// stalling on every chunk boundary; boost again if the backlog builds back up.
 	if (isLiveObserverMode() && TheFramePacer)
 	{
-		const Int LIVE_OBSERVER_EDGE_MARGIN_BYTES = 2048;
-		const Int LIVE_OBSERVER_REBOOST_BYTES = 8192;
+		// The margin is a few seconds of match at the stream's observed byte rate (the
+		// transport keeps it updated); a fixed byte count would be minutes on an idle map.
+		const Int edgeMarginBytes = m_liveObserverEdgeMarginBytes;
+		const Int reboostBytes = edgeMarginBytes * 4;
 		const Int backlog = m_liveObserverKnownLength - m_replayReadPos;
-		if (m_liveObserverFpsBoosted && (m_liveObserverWaitingForBytes || backlog < LIVE_OBSERVER_EDGE_MARGIN_BYTES))
+		if (m_liveObserverFpsBoosted && (m_liveObserverWaitingForBytes || backlog < edgeMarginBytes))
 		{
 			OBS_LOG("LiveObserver: near the live edge at frame %u (backlog %d bytes); restoring FPS limit %d", TheGameLogic->getFrame(), backlog, m_liveObserverSavedFpsLimit);
 			setLiveObserverBoost(FALSE);
 		}
-		else if (!m_liveObserverFpsBoosted && !m_liveObserverWaitingForBytes && backlog > LIVE_OBSERVER_REBOOST_BYTES)
+		else if (!m_liveObserverFpsBoosted && !m_liveObserverWaitingForBytes && backlog > reboostBytes)
 		{
 			OBS_LOG("LiveObserver: backlog %d bytes at frame %u; boosting again", backlog, TheGameLogic->getFrame());
 			setLiveObserverBoost(TRUE);
@@ -598,6 +601,16 @@ void RecorderClass::noteLiveObserverBytes(Int fileLength) {
 	if (fileLength > m_liveObserverKnownLength)
 		m_liveObserverKnownLength = fileLength;
 	m_liveObserverBytesArrived = TRUE;
+}
+
+void RecorderClass::setLiveObserverEdgeMargin(Int bytes) {
+	const Int LIVE_OBSERVER_EDGE_MARGIN_MIN = 256;
+	const Int LIVE_OBSERVER_EDGE_MARGIN_MAX = 64 * 1024;
+	if (bytes < LIVE_OBSERVER_EDGE_MARGIN_MIN)
+		bytes = LIVE_OBSERVER_EDGE_MARGIN_MIN;
+	if (bytes > LIVE_OBSERVER_EDGE_MARGIN_MAX)
+		bytes = LIVE_OBSERVER_EDGE_MARGIN_MAX;
+	m_liveObserverEdgeMarginBytes = bytes;
 }
 
 /**

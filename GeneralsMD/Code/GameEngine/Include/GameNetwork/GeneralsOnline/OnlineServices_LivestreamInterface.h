@@ -92,5 +92,7 @@ private:
 	bool m_watchEnded = false;
 	int64_t m_watchLastPollMS = 0;
 	int m_watchFailures = 0;
-	uint32_t m_watchGeneration = 0;  // bumped per StartWatching so a stale poll reply cannot land in a new file
+	uint32_t m_watchGeneration = 0;
+	int64_t m_watchFirstBytesMS = 0;  // when the first bytes landed; playback starts a little after, once the header is surely whole
+	int64_t m_watchFirstBytesFrom = 0;  // bumped per StartWatching so a stale poll reply cannot land in a new file
 };

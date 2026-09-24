@@ -151,6 +151,7 @@ public:
 	Bool isLiveObserverWaitingForBytes() const { return m_liveObserverWaitingForBytes; }
 	void setLiveObserverStreamOpen(Bool open) { m_liveObserverStreamOpen = open; }
 	void noteLiveObserverBytes(Int fileLength); ///< the transport appended bytes; fileLength is the file's new size
+	void setLiveObserverEdgeMargin(Int bytes); ///< how far short of the live edge to stop draining, in bytes (a few seconds of stream)
 	Bool playbackFileLiveObserver(AsciiString filename); ///< playbackFile() that then flips the mode to LIVE_OBSERVER
 	void setLiveObserverBoost(Bool boost); ///< run the logic uncapped (draining a backlog) or at the user's rate
 	void initControls();															///< Show or Hide the Replay controls
@@ -234,6 +235,7 @@ protected:
 	Bool        m_liveObserverBytesArrived;		///< the transport appended since the last reopen attempt
 	Bool        m_liveObserverTruncated;		///< a torn record with the stream closed: the file ends here
 	UnsignedInt m_liveObserverLastReopenMs;
+	Int         m_liveObserverEdgeMarginBytes;
 	UnsignedInt m_liveObserverStarvedSinceMs;	///< wall clock when the byte starvation began, 0 while fed
 };
 
