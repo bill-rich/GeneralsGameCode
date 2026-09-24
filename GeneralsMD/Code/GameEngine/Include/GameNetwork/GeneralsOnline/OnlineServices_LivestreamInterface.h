@@ -50,8 +50,10 @@ public:
 	// Observer side.
 	void ListStreams(std::function<void(bool bSuccess, std::vector<LivestreamEntry> streams)> cb);
 	const std::vector<LivestreamEntry>& GetLastStreamList() const { return m_lastStreamList; }
-	bool StartWatching(int64_t lobbyID);
+	bool StartWatching(const LivestreamEntry& stream); ///< false if already watching, not on the shell, or the map is missing
 	void StopWatching();
+	void CancelWatchIfNotStarted(); ///< leaving the lobby screen before playback began drops the watch
+	bool HasMapFor(const LivestreamEntry& stream) const;
 	bool IsWatching() const { return m_watchLobbyID != -1; }
 
 	// Streamer side (lobby owner while recording an online match).
@@ -89,4 +91,5 @@ private:
 	bool m_watchEnded = false;
 	int64_t m_watchLastPollMS = 0;
 	int m_watchFailures = 0;
+	uint32_t m_watchGeneration = 0;  // bumped per StartWatching so a stale poll reply cannot land in a new file
 };

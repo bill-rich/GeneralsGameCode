@@ -150,7 +150,9 @@ public:
 	Bool isLiveObserverCatchup() const { return isLiveObserverMode() && m_liveObserverFpsBoosted; } ///< still draining the snapshot faster than realtime
 	Bool isLiveObserverWaitingForBytes() const { return m_liveObserverWaitingForBytes; }
 	void setLiveObserverStreamOpen(Bool open) { m_liveObserverStreamOpen = open; }
+	void noteLiveObserverBytes(Int fileLength); ///< the transport appended bytes; fileLength is the file's new size
 	Bool playbackFileLiveObserver(AsciiString filename); ///< playbackFile() that then flips the mode to LIVE_OBSERVER
+	void setLiveObserverBoost(Bool boost); ///< run the logic uncapped (draining a backlog) or at the user's rate
 	void initControls();															///< Show or Hide the Replay controls
 
 	static AsciiString getReplayDir();								///< Returns the directory that holds the replay files.
@@ -227,6 +229,11 @@ protected:
 	Int         m_liveObserverRetryPos;
 	Bool        m_liveObserverFpsBoosted;
 	Int         m_liveObserverSavedFpsLimit;
+	Bool        m_liveObserverSavedUseFpsLimit;
+	Int         m_liveObserverKnownLength;		///< bytes the transport has written so far (backlog = this - m_replayReadPos)
+	Bool        m_liveObserverBytesArrived;		///< the transport appended since the last reopen attempt
+	Bool        m_liveObserverTruncated;		///< a torn record with the stream closed: the file ends here
+	UnsignedInt m_liveObserverLastReopenMs;
 	UnsignedInt m_liveObserverStarvedSinceMs;	///< wall clock when the byte starvation began, 0 while fed
 };
 

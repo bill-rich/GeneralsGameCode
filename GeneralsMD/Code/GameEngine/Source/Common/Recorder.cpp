@@ -401,6 +401,11 @@ void RecorderClass::init() {
 	m_liveObserverFpsBoosted      = FALSE;
 	m_liveObserverSavedFpsLimit   = 0;
 	m_liveObserverStarvedSinceMs  = 0;
+	m_liveObserverSavedUseFpsLimit = TRUE;
+	m_liveObserverKnownLength     = 0;
+	m_liveObserverBytesArrived    = FALSE;
+	m_liveObserverTruncated       = FALSE;
+	m_liveObserverLastReopenMs    = 0;
 
 	OptionPreferences optionPref;
 	m_archiveReplays = optionPref.getArchiveReplaysEnabled();
@@ -498,12 +503,16 @@ void RecorderClass::updatePlayback() {
 			m_nextFrame = -1;
 			return;
 		}
+		// Reopen only once the transport says it appended something (or once a second in
+		// case it never says), not every logic tick.
+		const UnsignedInt LIVE_OBSERVER_REOPEN_FALLBACK_MS = 1000;
+		if (!m_liveObserverBytesArrived && nowMs - m_liveObserverLastReopenMs < LIVE_OBSERVER_REOPEN_FALLBACK_MS)
+			return;
+		m_liveObserverBytesArrived = FALSE;
+		m_liveObserverLastReopenMs = nowMs;
 		AsciiString fname = m_file->getName();
 		m_file->close();
 		m_file = TheFileSystem->openFile(fname.str(), File::READ | File::BINARY);
-		static UnsignedInt s_retryLogged = 0;
-		if (s_retryLogged++ < 5)
-			OBS_LOG("LiveObserver: retry reopen '%s' -> %s, seek %d, frame %u", fname.str(), m_file ? "ok" : "FAILED", m_liveObserverRetryPos, TheGameLogic->getFrame());
 		if (m_file == nullptr)
 		{
 			OBS_LOG("LiveObserver: could not reopen %s", fname.str());
@@ -539,14 +548,56 @@ void RecorderClass::updatePlayback() {
 			break;
 	}
 
-	// Live observing: the first EOF means the snapshot is drained and we are at the
-	// live edge. Drop the frame rate back to normal so we stop racing ahead.
-	if (isLiveObserverMode() && m_liveObserverWaitingForBytes && m_liveObserverFpsBoosted && TheFramePacer)
+	// Live observing: drain the backlog fast, but stop a little short of the live edge
+	// and play the rest at normal speed, so the viewer keeps a small buffer instead of
+	// stalling on every chunk boundary; boost again if the backlog builds back up.
+	if (isLiveObserverMode() && TheFramePacer)
 	{
-		OBS_LOG("LiveObserver: caught up to the live edge at frame %u; restoring FPS limit %d", TheGameLogic->getFrame(), m_liveObserverSavedFpsLimit);
-		TheFramePacer->setFramesPerSecondLimit(m_liveObserverSavedFpsLimit);
-		m_liveObserverFpsBoosted = FALSE;
+		const Int LIVE_OBSERVER_EDGE_MARGIN_BYTES = 2048;
+		const Int LIVE_OBSERVER_REBOOST_BYTES = 8192;
+		const Int backlog = m_liveObserverKnownLength - m_replayReadPos;
+		if (m_liveObserverFpsBoosted && (m_liveObserverWaitingForBytes || backlog < LIVE_OBSERVER_EDGE_MARGIN_BYTES))
+		{
+			OBS_LOG("LiveObserver: near the live edge at frame %u (backlog %d bytes); restoring FPS limit %d", TheGameLogic->getFrame(), backlog, m_liveObserverSavedFpsLimit);
+			setLiveObserverBoost(FALSE);
+		}
+		else if (!m_liveObserverFpsBoosted && !m_liveObserverWaitingForBytes && backlog > LIVE_OBSERVER_REBOOST_BYTES)
+		{
+			OBS_LOG("LiveObserver: backlog %d bytes at frame %u; boosting again", backlog, TheGameLogic->getFrame());
+			setLiveObserverBoost(TRUE);
+		}
 	}
+}
+
+/**
+ * Run the logic as fast as the machine allows (TRUE) or at the user's frame rate (FALSE).
+ * The saved user settings are restored on the way down.
+ */
+void RecorderClass::setLiveObserverBoost(Bool boost) {
+	if (boost == m_liveObserverFpsBoosted || TheFramePacer == nullptr)
+		return;
+	if (boost)
+	{
+		// Never save a 0: FrameRateLimit::wait would spin forever restoring it.
+		m_liveObserverSavedFpsLimit = TheFramePacer->getFramesPerSecondLimit();
+		if (m_liveObserverSavedFpsLimit <= 0)
+			m_liveObserverSavedFpsLimit = LOGICFRAMES_PER_SECOND;
+		m_liveObserverSavedUseFpsLimit = TheGlobalData->m_useFpsLimit;
+		TheFramePacer->setUncappedForCatchup(TRUE);
+	}
+	else
+	{
+		TheFramePacer->setUncappedForCatchup(FALSE);
+		TheFramePacer->setFramesPerSecondLimit(m_liveObserverSavedFpsLimit);
+		TheWritableGlobalData->m_useFpsLimit = m_liveObserverSavedUseFpsLimit;
+	}
+	m_liveObserverFpsBoosted = boost;
+}
+
+void RecorderClass::noteLiveObserverBytes(Int fileLength) {
+	if (fileLength > m_liveObserverKnownLength)
+		m_liveObserverKnownLength = fileLength;
+	m_liveObserverBytesArrived = TRUE;
 }
 
 /**
@@ -554,6 +605,8 @@ void RecorderClass::updatePlayback() {
  * reaching the end of the playback file.
  */
 void RecorderClass::stopPlayback() {
+	if (isLiveObserverMode())
+		setLiveObserverBoost(FALSE);
 	if (m_file != nullptr) {
 		m_file->close();
 		m_file = nullptr;
@@ -1129,17 +1182,10 @@ Bool RecorderClass::playbackFileLiveObserver(AsciiString filename)
 	m_liveObserverStreamOpen = TRUE;
 	m_liveObserverStarvedSinceMs = 0;
 
-	// Drain the snapshot fast; updatePlayback drops back to the saved limit on the
-	// first EOF. Never save a 0: FrameRateLimit::wait would spin forever restoring it.
-	if (TheFramePacer)
-	{
-		m_liveObserverSavedFpsLimit = TheFramePacer->getFramesPerSecondLimit();
-		if (m_liveObserverSavedFpsLimit <= 0)
-			m_liveObserverSavedFpsLimit = LOGICFRAMES_PER_SECOND;
-		TheFramePacer->setFramesPerSecondLimit(1000);
-		TheWritableGlobalData->m_useFpsLimit = TRUE;
-		m_liveObserverFpsBoosted = TRUE;
-	}
+	// Drain the snapshot fast; updatePlayback drops back to the user's rate near the
+	// live edge (see setLiveObserverBoost).
+	m_liveObserverTruncated = FALSE;
+	setLiveObserverBoost(TRUE);
 	OBS_LOG("LiveObserver: playing %s live, file pos %d, waiting=%d", filename.str(), m_file ? m_file->position() : -1, m_liveObserverWaitingForBytes ? 1 : 0);
 	return TRUE;
 }
@@ -1459,6 +1505,11 @@ AsciiString RecorderClass::readAsciiString() {
  * is stopped and the next frame is said to be -1.
  */
 void RecorderClass::readNextFrame() {
+	if (m_liveObserverTruncated) {
+		m_nextFrame = -1;
+		stopPlayback();
+		return;
+	}
 	// while playbackFile is still opening the file the tracked offset is not seeded yet;
 	// File::position() is reliable at that point
 	const Int posBefore = m_liveObserverArming ? m_file->position() : m_replayReadPos;
@@ -1506,12 +1557,20 @@ Bool RecorderClass::readReplayBytes(void *dst, Int size) {
  * playback, so the partial command is just not appended.
  */
 void RecorderClass::rollbackTornRecord(Int posBefore) {
-	if (isLiveObserverMode() && m_liveObserverStreamOpen) {
+	if (!isLiveObserverMode())
+		return;
+	if (m_liveObserverStreamOpen) {
 		// posBefore is the start of the record body; its frame number sits just before it
 		// and the retry in updatePlayback re-reads the frame number first, so rewind past it.
 		m_liveObserverRetryPos        = posBefore - (Int)sizeof(m_nextFrame);
 		m_liveObserverWaitingForBytes = TRUE;
 		OBS_LOG("LiveObserver: torn record at pos %d (frame %u), will retry", posBefore, m_nextFrame);
+	} else {
+		// The stream is over and the last record is incomplete: nothing after it is
+		// usable, so the next frame read must end playback rather than parse the
+		// remaining argument bytes as a frame number.
+		m_liveObserverTruncated = TRUE;
+		OBS_LOG("LiveObserver: torn record at pos %d with the stream closed; ending at frame %u", posBefore, TheGameLogic->getFrame());
 	}
 }
 

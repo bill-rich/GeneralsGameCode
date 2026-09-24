@@ -26,6 +26,7 @@
 #include "Common/Recorder.h"
 #include "Common/FileSystem.h"
 #include "GameClient/Shell.h"
+#include "GameClient/MapUtil.h"
 #include "GameLogic/GameLogic.h"
 
 std::string Base64Encode(const std::vector<uint8_t>& data);
@@ -34,6 +35,7 @@ std::vector<uint8_t> Base64Decode(const std::string& encodedData);
 namespace
 {
 	const int STREAM_SEND_INTERVAL_MS = 1000;
+	const int STREAM_POST_TIMEOUT_MS = 20000;    // a 340 KB base64 chunk on a slow uplink outlives the default 5 s
 	const int STREAM_MAX_CHUNK_BYTES = 256 * 1024;
 	const int STREAM_MAX_FAILURES = 30;          // consecutive failed sends before the streamer gives up (~30 s)
 	const int WATCH_POLL_INTERVAL_MS = 1000;
@@ -43,7 +45,7 @@ namespace
 
 	int64_t NowMS()
 	{
-		return (int64_t)timeGetTime();
+		return (int64_t)GetTickCount64(); // 64-bit: timeGetTime() wraps after 49.7 days and the interval math would go negative
 	}
 
 	// Reads [offset, offset+maxBytes) of a file that another handle is still writing.
@@ -187,7 +189,7 @@ void NGMP_OnlineServices_LivestreamInterface::SendChunk(const std::vector<uint8_
 				NetworkLog(ELogVerbosity::LOG_RELEASE, "Livestream: giving up streaming lobby %lld", (long long)m_streamLobbyID);
 				StopStreaming();
 			}
-		});
+		}, nullptr, STREAM_POST_TIMEOUT_MS);
 }
 
 void NGMP_OnlineServices_LivestreamInterface::SendEnd()
@@ -272,11 +274,29 @@ AsciiString NGMP_OnlineServices_LivestreamInterface::GetObserverFilePath() const
 	return path;
 }
 
-bool NGMP_OnlineServices_LivestreamInterface::StartWatching(int64_t lobbyID)
+bool NGMP_OnlineServices_LivestreamInterface::HasMapFor(const LivestreamEntry& stream) const
 {
+	if (TheMapCache == nullptr || stream.map_path.empty())
+	{
+		return false;
+	}
+	AsciiString mapPath = stream.map_path.c_str();
+	mapPath.toLower();
+	return TheMapCache->findMap(mapPath) != nullptr;
+}
+
+bool NGMP_OnlineServices_LivestreamInterface::StartWatching(const LivestreamEntry& stream)
+{
+	const int64_t lobbyID = stream.lobby_id;
 	// isInGame() is true on the shell map too, so gate on the shell being up instead.
 	if (IsWatching() || TheRecorder == nullptr || TheShell == nullptr || !TheShell->isShellActive())
 	{
+		return false;
+	}
+	// The replay names the map; without it startNewGame has nothing to load.
+	if (!HasMapFor(stream))
+	{
+		NetworkLog(ELogVerbosity::LOG_RELEASE, "Livestream: map %s is not installed, not watching lobby %lld", stream.map_path.c_str(), (long long)lobbyID);
 		return false;
 	}
 
@@ -297,8 +317,18 @@ bool NGMP_OnlineServices_LivestreamInterface::StartWatching(int64_t lobbyID)
 	m_watchEnded = false;
 	m_watchLastPollMS = 0;
 	m_watchFailures = 0;
+	++m_watchGeneration;
 	NetworkLog(ELogVerbosity::LOG_RELEASE, "Livestream: watching lobby %lld into %s", (long long)lobbyID, GetObserverFilePath().str());
 	return true;
+}
+
+void NGMP_OnlineServices_LivestreamInterface::CancelWatchIfNotStarted()
+{
+	if (IsWatching() && !m_watchPlaybackStarted)
+	{
+		NetworkLog(ELogVerbosity::LOG_RELEASE, "Livestream: watch of lobby %lld cancelled before playback began", (long long)m_watchLobbyID);
+		StopWatching();
+	}
 }
 
 void NGMP_OnlineServices_LivestreamInterface::StopWatching()
@@ -312,6 +342,8 @@ void NGMP_OnlineServices_LivestreamInterface::StopWatching()
 	m_watchFrom = 0;
 	m_watchPlaybackStarted = false;
 	m_watchEnded = false;
+	m_watchRequestInFlight = false;
+	++m_watchGeneration;
 	if (TheRecorder != nullptr)
 	{
 		TheRecorder->setLiveObserverStreamOpen(FALSE);
@@ -334,7 +366,12 @@ void NGMP_OnlineServices_LivestreamInterface::TickObserver(int64_t nowMS)
 
 	if (m_watchEnded)
 	{
-		// Everything the service had is in the file; the recorder plays it out and ends by itself.
+		// Everything the service had is in the file; the recorder plays it out and ends by
+		// itself. A stream that ended before playback could even start is simply dropped.
+		if (!m_watchPlaybackStarted)
+		{
+			StopWatching();
+		}
 		return;
 	}
 
@@ -350,11 +387,16 @@ void NGMP_OnlineServices_LivestreamInterface::PollObserver()
 	std::string strURI = std::format("{}/{}?from={}", NGMP_OnlineServicesManager::GetAPIEndpoint("Livestream"), m_watchLobbyID, m_watchFrom);
 	std::map<std::string, std::string> mapHeaders;
 	const int64_t lobbyID = m_watchLobbyID;
+	const uint32_t generation = m_watchGeneration;
 
 	m_watchRequestInFlight = true;
 	m_watchLastPollMS = NowMS();
-	NGMP_OnlineServicesManager::GetInstance()->GetHTTPManager()->SendGETRequest(strURI.c_str(), EIPProtocolVersion::DONT_CARE, mapHeaders, [this, lobbyID](bool bSuccess, int statusCode, std::string strBody, HTTPRequest* pReq)
+	NGMP_OnlineServicesManager::GetInstance()->GetHTTPManager()->SendGETRequest(strURI.c_str(), EIPProtocolVersion::DONT_CARE, mapHeaders, [this, lobbyID, generation](bool bSuccess, int statusCode, std::string strBody, HTTPRequest* pReq)
 		{
+			if (generation != m_watchGeneration)
+			{
+				return; // a reply for a watch that was stopped or restarted since
+			}
 			m_watchRequestInFlight = false;
 			if (!IsWatching() || m_watchLobbyID != lobbyID)
 			{
@@ -397,10 +439,17 @@ void NGMP_OnlineServices_LivestreamInterface::PollObserver()
 			}
 			m_watchFailures = 0;
 
-			if (!bytes.empty() && !AppendObserverBytes(bytes))
+			if (!bytes.empty())
 			{
-				StopWatching();
-				return;
+				if (!AppendObserverBytes(bytes))
+				{
+					StopWatching();
+					return;
+				}
+				if (m_watchPlaybackStarted && TheRecorder != nullptr)
+				{
+					TheRecorder->noteLiveObserverBytes((Int)m_watchFrom);
+				}
 			}
 
 			// Keep pulling as long as the service has more ready; the interval only paces idle polls.
@@ -435,6 +484,7 @@ void NGMP_OnlineServices_LivestreamInterface::PollObserver()
 					return;
 				}
 				m_watchPlaybackStarted = true;
+				TheRecorder->noteLiveObserverBytes((Int)m_watchFrom);
 			}
 		});
 }
