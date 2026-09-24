@@ -22,6 +22,7 @@
 #include "Common/PlayerList.h"
 #include "Common/Player.h"
 #include "Common/Radar.h"
+#include "Common/Recorder.h"
 
 #include "GameClient/ControlBar.h"
 #include "GameClient/GameClient.h"
@@ -62,6 +63,19 @@ bool localPlayerHasRadar()
 	if (!TheRadar->isRadarHidden(index) && player->hasRadar())
 		return true;
 
+	return false;
+}
+
+bool isViewerOnlyClient()
+{
+	if (TheRecorder != nullptr && TheRecorder->isPlaybackMode())
+		return true;
+	if (ThePlayerList != nullptr)
+	{
+		const Player* local = ThePlayerList->getLocalPlayer();
+		if (local != nullptr && local->isPlayerObserver())
+			return true;
+	}
 	return false;
 }
 

@@ -825,22 +825,44 @@ void GameLogic::logicMessageDispatcher( GameMessage *msg, void *userData )
 #endif
 
 	/**/ /// @todo: multiplayer semantics
-	// TheSuperHackers @feature bill-rich 15/09/2026 Only mirror the observed player's selection onto an
-	// empty viewer selection. The viewer's own selection now brings up the owner's
-	// control bar, so it must not be hijacked by the recorded selection stream.
-	if (currentlySelectedGroup && TheRecorder->isPlaybackMode() && TheGlobalData->m_useCameraInReplay && TheControlBar->getObserverLookAtPlayer() == msgPlayer &&
-			TheInGameUI->getSelectCount() == 0 /*&& !TheRecorder->isMultiplayer()*/)
+	// TheSuperHackers @feature bill-rich 15/09/2026 Mirror the observed player's selection only while the
+	// viewer's selection is empty or is still the one a previous mirror made. The viewer's
+	// own selection now brings up the owner's control bar, so it must not be hijacked by
+	// the recorded selection stream; a mirrored selection, on the other hand, must keep
+	// following the player instead of sticking to the first thing they picked.
+	if (currentlySelectedGroup && TheRecorder->isPlaybackMode() && TheGlobalData->m_useCameraInReplay && TheControlBar->getObserverLookAtPlayer() == msgPlayer
+			/*&& !TheRecorder->isMultiplayer()*/)
 	{
-		const VecObjectID& selectedObjects = currentlySelectedGroup->getAllIDs();
-		TheInGameUI->deselectAllDrawables();
-		for (VecObjectID::const_iterator it = selectedObjects.begin(); it != selectedObjects.end(); ++it)
+		static VecObjectID s_mirroredSelection;
+		Bool selectionIsMirrorOwned = TheInGameUI->getSelectCount() == 0;
+		if (!selectionIsMirrorOwned && TheInGameUI->getSelectCount() == (Int)s_mirroredSelection.size())
 		{
-			const Object *obj = findObjectByID(*it);
-			if (obj)
+			selectionIsMirrorOwned = TRUE;
+			const DrawableList* selected = TheInGameUI->getAllSelectedDrawables();
+			for (DrawableList::const_iterator it = selected->begin(); it != selected->end() && selectionIsMirrorOwned; ++it)
 			{
-				Drawable *draw = obj->getDrawable();
-				if (draw)
-					TheInGameUI->selectDrawable(draw);
+				const Object* obj = (*it) ? (*it)->getObject() : nullptr;
+				const ObjectID id = obj ? obj->getID() : INVALID_ID;
+				selectionIsMirrorOwned = std::find(s_mirroredSelection.begin(), s_mirroredSelection.end(), id) != s_mirroredSelection.end();
+			}
+		}
+		if (selectionIsMirrorOwned)
+		{
+			const VecObjectID& selectedObjects = currentlySelectedGroup->getAllIDs();
+			TheInGameUI->deselectAllDrawables();
+			s_mirroredSelection.clear();
+			for (VecObjectID::const_iterator it = selectedObjects.begin(); it != selectedObjects.end(); ++it)
+			{
+				const Object *obj = findObjectByID(*it);
+				if (obj)
+				{
+					Drawable *draw = obj->getDrawable();
+					if (draw)
+					{
+						TheInGameUI->selectDrawable(draw);
+						s_mirroredSelection.push_back(obj->getID());
+					}
+				}
 			}
 		}
 	}

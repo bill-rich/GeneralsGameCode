@@ -6521,7 +6521,7 @@ void InGameUI::drawObserverStats(Int & x, Int & y)
 	// edge, over the production queue row of the control bar. While the viewer has
 	// something selected the owner's control bar is what they asked to see, so the
 	// table steps aside; deselect (Esc) and it is back.
-	if (isViewerOnlyClient() && TheInGameUI->getSelectCount() > 0)
+	if (rts::isViewerOnlyClient() && TheInGameUI->getSelectCount() > 0)
 		return;
 
 	if (!TheInGameUI->getInputEnabled() || TheGameLogic->isIntroMoviePlaying() ||

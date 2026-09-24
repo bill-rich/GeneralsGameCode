@@ -30,6 +30,7 @@
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
 
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "Common/GameUtility.h"
 #define DEFINE_GUI_COMMAND_NAMES
 #define DEFINE_COMMAND_OPTION_NAMES
 #define DEFINE_WEAPONSLOTTYPE_NAMES
@@ -1463,13 +1464,14 @@ void ControlBar::update()
 		// availability, production queues, garrison contents, construction
 		// progress. Command issuance is blocked in processCommandUI.
 		//
-		if( isViewerOnlyClient() )
+		if( rts::isViewerOnlyClient() )
 		{
-			if( TheInGameUI->getSelectCount() == 0 )
+			// nothing selected, or a selection with no context (an object being
+			// sold, for instance): bring the observer windows back if an object
+			// context hid them, restoring the info window when we were looking
+			// at a specific player
+			auto restoreObserverWindows = [this]()
 			{
-				// nothing selected: bring the observer windows back if an object
-				// context hid them, restoring the info window when we were
-				// looking at a specific player
 				if( m_currContext != CB_CONTEXT_OBSERVER_LIST )
 				{
 					switchToContext( CB_CONTEXT_OBSERVER_LIST, nullptr );
@@ -1482,6 +1484,11 @@ void ControlBar::update()
 					showRallyPoint( nullptr );
 				}
 				m_UIDirty = FALSE;
+			};
+
+			if( TheInGameUI->getSelectCount() == 0 )
+			{
+				restoreObserverWindows();
 				return;
 			}
 
@@ -1496,7 +1503,10 @@ void ControlBar::update()
 
 			if( m_currentSelectedDrawable == nullptr ||
 					m_currentSelectedDrawable->getObject() == nullptr )
+			{
+				restoreObserverWindows();
 				return;
+			}
 
 			switch( m_currContext )
 			{
@@ -1842,7 +1852,7 @@ void ControlBar::evaluateContextUI()
 	// TheSuperHackers @feature bill-rich 15/09/2026 Observers / replay viewers always fall
 	// through to the regular evaluation below so they can see production queues
 	// and garrison contents.
-	if( !TheInGameUI->areSelectedObjectsControllable() && !isViewerOnlyClient() )
+	if( !TheInGameUI->areSelectedObjectsControllable() && !rts::isViewerOnlyClient() )
 	{
 		//Also make sure the unit isn't a garrisonable neutral civ team building!
 		Drawable *draw = selectedDrawables->front();
@@ -1986,7 +1996,7 @@ void ControlBar::evaluateContextUI()
 
 				// we cannot select objects that are controlled by our enemies
 				relationship = localPlayer->getRelationship( obj->getTeam() );
-				if( obj->isLocallyControlled() == TRUE || relationship == NEUTRAL || isViewerOnlyClient() )
+				if( obj->isLocallyControlled() == TRUE || relationship == NEUTRAL || rts::isViewerOnlyClient() )
 					switchToContext( CB_CONTEXT_STRUCTURE_INVENTORY, drawToEvaluateFor );
 
 			}
@@ -2000,8 +2010,8 @@ void ControlBar::evaluateContextUI()
 				switchToContext( CB_CONTEXT_COMMAND, drawToEvaluateFor );
 
 			}
-			// viewer-only clients can reach here for objects owned by anyone,
-			// including neutral players without a player template
+			// TheSuperHackers @bugfix bill-rich 15/09/2026 viewer-only clients can reach here for objects
+			// owned by anyone, including neutral players without a player template
 			else if (obj->getControllingPlayer()
 				&& obj->getControllingPlayer()->getPlayerTemplate()
 				&& obj->getControllingPlayer()->getPlayerTemplate()->getBeaconTemplate().compare(obj->getTemplate()->getName()) == 0)

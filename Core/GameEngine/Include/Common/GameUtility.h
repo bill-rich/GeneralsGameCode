@@ -33,6 +33,12 @@ Player* getObservedOrLocalPlayer(); ///< Get the current observed or local playe
 Player* getObservedOrLocalPlayer_Safe(); ///< Get the current observed or local player. Is never null, except when the application does not have players.
 PlayerIndex getObservedOrLocalPlayerIndex_Safe(); ///< Get the current observed or local player index. Returns 0 when the application does not have players.
 
+// TheSuperHackers @feature bill-rich 15/09/2026 True when the local client is watching a game it does not
+// control: any replay playback mode, or a local player sitting in an observer slot. Such
+// viewers get the owning player's control bar (production queues, garrison contents,
+// construction progress) in read-only form.
+bool isViewerOnlyClient();
+
 void changeLocalPlayer(Player* player); //< Change local player during game. Must not pass null.
 void changeObservedPlayer(Player* player); ///< Change observed player during game. Can pass null: is identical to passing the "ReplayObserver" player.
 

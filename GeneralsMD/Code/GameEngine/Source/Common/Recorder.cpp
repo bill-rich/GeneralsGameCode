@@ -1736,20 +1736,6 @@ Bool RecorderClass::isMultiplayer()
 	return false;
 }
 
-// TheSuperHackers @feature bill-rich 15/09/2026 See Recorder.h.
-Bool isViewerOnlyClient()
-{
-	if (TheRecorder && TheRecorder->isPlaybackMode())
-		return TRUE;
-	if (ThePlayerList)
-	{
-		Player *local = ThePlayerList->getLocalPlayer();
-		if (local && local->isPlayerObserver())
-			return TRUE;
-	}
-	return FALSE;
-}
-
 /**
  * Create a new recorder object.
  */

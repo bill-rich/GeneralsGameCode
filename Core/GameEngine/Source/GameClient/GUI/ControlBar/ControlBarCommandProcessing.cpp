@@ -30,6 +30,7 @@
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "Common/GameUtility.h"
 
 #include "Common/BuildAssistant.h"
 #include "Common/Money.h"
@@ -129,7 +130,7 @@ CBCommandStatus ControlBar::processCommandUI( GameWindow *control,
 	// bail out before any side effects. The recorder's cullBadCommands is the
 	// backstop should a command message slip into the stream some other way.
 	//
-	if( isViewerOnlyClient() )
+	if( rts::isViewerOnlyClient() )
 		return CBC_COMMAND_NOT_USED;
 
 	// get the command pointer from the control user data we put in the button

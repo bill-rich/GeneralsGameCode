@@ -29,6 +29,7 @@
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "Common/GameUtility.h"
 
 #include "Common/NameKeyGenerator.h"
 #include "Common/Recorder.h"
@@ -209,7 +210,7 @@ void ControlBar::updateContextStructureInventory()
 	// TheSuperHackers @feature bill-rich 15/09/2026 Observers / replay viewers are exempt:
 	// they're allowed to keep watching the garrison contents regardless of ownership.
 	Player *localPlayer = ThePlayerList->getLocalPlayer();
-	if( !isViewerOnlyClient() &&
+	if( !rts::isViewerOnlyClient() &&
 			source->isLocallyControlled() == FALSE &&
 			localPlayer->getRelationship( source->getTeam() ) != NEUTRAL )
 	{

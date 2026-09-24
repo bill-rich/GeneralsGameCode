@@ -29,6 +29,7 @@
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+#include "Common/GameUtility.h"
 
 #include "Common/NameKeyGenerator.h"
 #include "Common/Recorder.h"
@@ -1478,7 +1479,7 @@ CommandAvailability ControlBar::getCommandAvailability( const CommandButton *com
 				// viewer-only clients own nothing but should still see which
 				// weapon the owner has active
 				if( draw && draw->getObject() &&
-						( draw->getObject()->isLocallyControlled() || isViewerOnlyClient() ) &&
+						( draw->getObject()->isLocallyControlled() || rts::isViewerOnlyClient() ) &&
 						draw->getObject()->getCurrentWeapon())
 				{
 					WeaponSlotType wslot = draw->getObject()->getCurrentWeapon()->getWeaponSlot();
